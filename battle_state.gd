@@ -51,10 +51,14 @@ func setup(p_player_count: int) -> void:
 	var occupied: Array = []
 	for player in players:
 		occupied.append(player.pos)
+	var black_knight_spawned := false
 	for i in range(enemy_count):
 		var enemy = EnemyState.new()
 		enemy.index = i
-		var et: String = ENEMY_TYPES[randi() % ENEMY_TYPES.size()]
+		var available_types := ENEMY_TYPES.filter(func(t): return t != "BlackKnight" or not black_knight_spawned)
+		var et: String = available_types[randi() % available_types.size()]
+		if et == "BlackKnight":
+			black_knight_spawned = true
 		enemy.enemy_type = et
 		var stats := enemy_base_stats(et)
 		enemy.max_hp = stats["max_hp"]
@@ -120,10 +124,14 @@ func setup_new_encounter() -> void:
 	for player in players:
 		if player.alive:
 			occupied.append(player.pos)
+	var black_knight_spawned_enc := false
 	for i in range(enemy_count):
 		var enemy = EnemyState.new()
 		enemy.index = i
-		var et: String = ENEMY_TYPES[randi() % ENEMY_TYPES.size()]
+		var available_types := ENEMY_TYPES.filter(func(t): return t != "BlackKnight" or not black_knight_spawned_enc)
+		var et: String = available_types[randi() % available_types.size()]
+		if et == "BlackKnight":
+			black_knight_spawned_enc = true
 		enemy.enemy_type = et
 		var stats := enemy_base_stats(et)
 		enemy.max_hp = stats["max_hp"]

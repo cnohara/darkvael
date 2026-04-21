@@ -376,7 +376,15 @@ func _on_enemy_event(_cam_node: Camera3D, ev: InputEvent,
 		_ep: Vector3, _n: Vector3, _si: int, enemy_idx: int) -> void:
 	if ev is InputEventMouseButton:
 		if ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			tile_pressed.emit(_enemy_grid_pos(enemy_idx))
 			enemy_pressed.emit(enemy_idx)
+
+func _enemy_grid_pos(enemy_idx: int) -> Vector2i:
+	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size():
+		return Vector2i(-1, -1)
+	var enemy_mi: MeshInstance3D = _enemy_mis[enemy_idx] as MeshInstance3D
+	var pos: Vector3 = enemy_mi.position
+	return Vector2i(roundi(pos.x), roundi(pos.z))
 
 func _start_enemy_target_pulse(enemy_idx: int) -> void:
 	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size() or _enemy_target_tweens.has(enemy_idx):

@@ -71,6 +71,7 @@ var _enemy_prev_block: Array = []
 var _enemy_prev_status: Array = []
 var end_overlay: Control = null
 var log_lbl: Label
+var _log_scroll: ScrollContainer = null
 var _screen_flash: ColorRect = null
 var _active_resolving_seat := -1
 var _active_resolving_card := -1
@@ -203,14 +204,26 @@ func _build_top_bar(parent: Control) -> void:
 	active_player_lbl.add_theme_color_override("font_color", Color(0.95, 0.82, 0.34))
 	row.add_child(active_player_lbl)
 
+	var middle := HBoxContainer.new()
+	middle.add_theme_constant_override("separation", 8)
+	top.add_child(middle)
+
+	var order_area := VBoxContainer.new()
+	order_area.add_theme_constant_override("separation", 2)
+	order_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	middle.add_child(order_area)
+
 	order_lbl = _lbl("Order: -")
-	order_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	top.add_child(order_lbl)
+	order_lbl.clip_text = true
+	order_area.add_child(order_lbl)
 
 	_turn_order_row = Control.new()
-	_turn_order_row.custom_minimum_size = Vector2(0, 82)
-	_turn_order_row.visible = false
-	top.add_child(_turn_order_row)
+	_turn_order_row.custom_minimum_size = Vector2(0, 54)
+	_turn_order_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_turn_order_row.visible = true
+	order_area.add_child(_turn_order_row)
+
+	_build_enemy_panel(middle)
 
 	planning_hint_lbl = _lbl("Each player has their own hand, selected row, and Ready button.")
 	planning_hint_lbl.add_theme_color_override("font_color", Color(0.68, 0.70, 0.78))
@@ -224,7 +237,6 @@ func _build_main_row(parent: Control) -> void:
 
 	_build_players_column(hbox)
 	_build_board(hbox)
-	_build_enemy_panel(hbox)
 
 func _build_players_column(parent: Control) -> void:
 	var outer := PanelContainer.new()
@@ -276,13 +288,6 @@ func _build_players_column(parent: Control) -> void:
 
 		header.add_child(_expand_spacer())
 
-		var focus_btn := Button.new()
-		focus_btn.text = "Focus"
-		focus_btn.custom_minimum_size = Vector2(72, 32)
-		_style_btn(focus_btn, Color(0.22, 0.32, 0.52))
-		focus_btn.pressed.connect(_on_focus_player.bind(seat_index))
-		header.add_child(focus_btn)
-
 		var ready_btn := Button.new()
 		ready_btn.text = "Ready"
 		ready_btn.custom_minimum_size = Vector2(84, 32)
@@ -308,37 +313,11 @@ func _build_players_column(parent: Control) -> void:
 		panel_vbox.add_child(selected_row)
 
 		var selected_cards: Array = []
-		var selected_left_btns: Array = []
-		var selected_right_btns: Array = []
 		for card_idx in range(PLAYER_MAX_SELECTED):
-			var slot_box := VBoxContainer.new()
-			slot_box.add_theme_constant_override("separation", 2)
-			selected_row.add_child(slot_box)
-
 			var card_panel := _make_card_panel()
 			card_panel.gui_input.connect(_on_selected_card_input.bind(seat_index, card_idx))
-			slot_box.add_child(card_panel)
+			selected_row.add_child(card_panel)
 			selected_cards.append(card_panel)
-
-			var btn_row := HBoxContainer.new()
-			btn_row.add_theme_constant_override("separation", 2)
-			slot_box.add_child(btn_row)
-
-			var left_btn := Button.new()
-			left_btn.text = "←"
-			left_btn.custom_minimum_size = Vector2(48, 28)
-			_style_btn(left_btn, Color(0.26, 0.26, 0.34))
-			left_btn.pressed.connect(_on_move_selected_pressed.bind(seat_index, card_idx, -1))
-			btn_row.add_child(left_btn)
-			selected_left_btns.append(left_btn)
-
-			var right_btn := Button.new()
-			right_btn.text = "→"
-			right_btn.custom_minimum_size = Vector2(48, 28)
-			_style_btn(right_btn, Color(0.26, 0.26, 0.34))
-			right_btn.pressed.connect(_on_move_selected_pressed.bind(seat_index, card_idx, 1))
-			btn_row.add_child(right_btn)
-			selected_right_btns.append(right_btn)
 
 		panel_vbox.add_child(_lbl("Hand:"))
 		var hand_row := HBoxContainer.new()
@@ -394,11 +373,8 @@ func _build_players_column(parent: Control) -> void:
 			"meta_lbl": meta_lbl,
 			"stamina_lbl": stamina_lbl,
 			"stamina_tween": null,
-			"focus_btn": focus_btn,
 			"ready_btn": ready_btn,
 			"selected_cards": selected_cards,
-			"selected_left_btns": selected_left_btns,
-			"selected_right_btns": selected_right_btns,
 			"hand_cards": hand_cards,
 		})
 
@@ -410,7 +386,7 @@ func _build_board(parent: Control) -> void:
 	parent.add_child(svc)
 
 	var sv := SubViewport.new()
-	sv.size = Vector2i(520, 420)
+	sv.size = Vector2i(640, 520)
 	sv.world_3d = World3D.new()
 	sv.physics_object_picking = true
 	sv.transparent_bg = false
@@ -425,20 +401,14 @@ func _build_board(parent: Control) -> void:
 
 func _build_enemy_panel(parent: Control) -> void:
 	var outer := PanelContainer.new()
-	outer.custom_minimum_size = Vector2(225, 0)
-	outer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	outer.add_theme_stylebox_override("panel", _flat_style(Color(0.12, 0.08, 0.08), 6, 6))
+	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer.add_theme_stylebox_override("panel", _flat_style(Color(0.12, 0.08, 0.08), 6, 4))
 	parent.add_child(outer)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	outer.add_child(scroll)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 5)
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(vbox)
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 5)
+	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer.add_child(hbox)
 
 	_enemy_panels.clear()
 	_enemy_hp_lbls.clear()
@@ -456,15 +426,14 @@ func _build_enemy_panel(parent: Control) -> void:
 	for i in range(BattleState.MAX_ENEMIES):
 		var panel := PanelContainer.new()
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		panel.add_theme_stylebox_override("panel", _flat_style(ENEMY_PANEL_BASE_COLOR, 5, 6))
+		panel.add_theme_stylebox_override("panel", _flat_style(ENEMY_PANEL_BASE_COLOR, 5, 4))
 		panel.mouse_filter = Control.MOUSE_FILTER_STOP
 		panel.gui_input.connect(_on_enemy_panel_input.bind(i))
-		panel.visible = false
-		vbox.add_child(panel)
+		hbox.add_child(panel)
 		_enemy_panels.append(panel)
 
 		var panel_vbox := VBoxContainer.new()
-		panel_vbox.add_theme_constant_override("separation", 3)
+		panel_vbox.add_theme_constant_override("separation", 2)
 		panel.add_child(panel_vbox)
 
 		panel_vbox.add_child(_lbl("Enemy %d" % (i + 1), true))
@@ -483,9 +452,9 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel_vbox.add_child(status_lbl)
 		_enemy_status_lbls.append(status_lbl)
 
-		var behavior_lbl := _lbl("Intent: ?")
-		behavior_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		behavior_lbl.custom_minimum_size = Vector2(0, 86)
+		var behavior_lbl := _lbl("Intent: ?\n\n")
+		behavior_lbl.clip_text = false
+		behavior_lbl.custom_minimum_size = Vector2(0, 66)
 		panel_vbox.add_child(behavior_lbl)
 		_enemy_behavior_lbls.append(behavior_lbl)
 
@@ -505,13 +474,18 @@ func _build_log(parent: Control) -> void:
 	row.add_theme_constant_override("separation", 8)
 	parent.add_child(row)
 
+	_log_scroll = ScrollContainer.new()
+	_log_scroll.custom_minimum_size = Vector2(0, 120)
+	_log_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_log_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(_log_scroll)
+
 	log_lbl = Label.new()
-	log_lbl.custom_minimum_size = Vector2(0, 120)
 	log_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_lbl.add_theme_color_override("font_color", Color(0.76, 0.76, 0.84))
 	log_lbl.add_theme_font_size_override("font_size", 18)
 	log_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	row.add_child(log_lbl)
+	_log_scroll.add_child(log_lbl)
 
 	next_round_btn = Button.new()
 	next_round_btn.text = "Next Round"
@@ -572,7 +546,6 @@ func _update_ui() -> void:
 			var prev_enemy_hp = _enemy_prev_hp[enemy_idx]
 			var prev_enemy_block = _enemy_prev_block[enemy_idx]
 			var prev_enemy_status = _enemy_prev_status[enemy_idx]
-			_enemy_panels[enemy_idx].visible = true
 			_refresh_enemy_panel_visual(enemy_idx)
 			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d  PA:%d" % [enemy.hp, enemy.max_hp, enemy.physical_armor]
 			_enemy_block_lbls[enemy_idx].text = "%s  Block: %d" % [enemy.enemy_type, enemy.block]
@@ -593,11 +566,16 @@ func _update_ui() -> void:
 					enemy.revealed.effect_text,
 				]
 			else:
-				_enemy_behavior_lbls[enemy_idx].text = "Intent: ?"
+				_enemy_behavior_lbls[enemy_idx].text = "Intent: ?\n\n"
 			_enemy_deck_lbls[enemy_idx].text = "Draw: %d  Discard: %d  XP:%d" % [enemy.draw.size(), enemy.discard.size(), enemy.xp_reward]
 		else:
-			_enemy_panels[enemy_idx].visible = false
+			_enemy_panels[enemy_idx].add_theme_stylebox_override("panel", _flat_style(Color(0.09, 0.07, 0.07), 5, 4))
 			_stop_enemy_panel_target_pulse(enemy_idx)
+			_enemy_hp_lbls[enemy_idx].text = "—"
+			_enemy_block_lbls[enemy_idx].text = "—"
+			_enemy_status_lbls[enemy_idx].text = ""
+			_enemy_behavior_lbls[enemy_idx].text = "\n\n"
+			_enemy_deck_lbls[enemy_idx].text = ""
 			_enemy_prev_hp[enemy_idx] = null
 			_enemy_prev_block[enemy_idx] = null
 			_enemy_prev_status[enemy_idx] = null
@@ -636,7 +614,6 @@ func _update_ui() -> void:
 		if prev_status != null and String(prev_status) != ui["status_lbl"].text:
 			_pulse_player_stat_label(ui, "status_lbl", "status_tween", STATUS_BASE_COLOR, STATUS_PULSE_COLOR)
 
-		var can_focus: bool = player.alive
 		var can_edit = _player_is_editable(player)
 		var panel_color = INACTIVE_PLAYER_COLOR
 		if not player.alive:
@@ -647,24 +624,17 @@ func _update_ui() -> void:
 			panel_color = ACTIVE_PLAYER_COLOR
 		panel.add_theme_stylebox_override("panel", _flat_style(panel_color, 6, 6))
 
-		var focus_btn: Button = ui["focus_btn"]
-		focus_btn.disabled = not can_focus
-
 		var ready_btn: Button = ui["ready_btn"]
 		ready_btn.disabled = ui_locked or bs.current_phase != BattleState.Phase.SELECT or not player.alive
 		ready_btn.text = "Unready" if player.ready else "Ready"
 		_style_btn(ready_btn, Color(0.54, 0.30, 0.18) if player.ready else Color(0.18, 0.45, 0.22))
 
 		var selected_cards: Array = ui["selected_cards"]
-		var left_btns: Array = ui["selected_left_btns"]
-		var right_btns: Array = ui["selected_right_btns"]
 		for card_idx in range(PLAYER_MAX_SELECTED):
 			var selected_card: CardData = player.selected[card_idx] if card_idx < player.selected.size() else null
 			var active_card := seat_index == _active_resolving_seat and card_idx == _active_resolving_card
 			_refresh_card_panel(selected_cards[card_idx], selected_card, selected_card != null, active_card)
 			selected_cards[card_idx].mouse_filter = Control.MOUSE_FILTER_STOP if can_edit else Control.MOUSE_FILTER_IGNORE
-			left_btns[card_idx].disabled = not can_edit or selected_card == null or card_idx == 0
-			right_btns[card_idx].disabled = not can_edit or selected_card == null or card_idx >= player.selected.size() - 1
 
 		var hand_cards: Array = ui["hand_cards"]
 		for hand_idx in range(PLAYER_HAND_SIZE):
@@ -684,6 +654,8 @@ func _update_ui() -> void:
 	_update_board()
 	var log_lines: Array = bs.combat_log.slice(maxi(0, bs.combat_log.size() - 8))
 	log_lbl.text = "\n".join(log_lines)
+	if _log_scroll:
+		_log_scroll.set_deferred("scroll_vertical", 999999)
 	_sync_online_snapshot()
 
 func _update_board() -> void:
@@ -743,12 +715,11 @@ func _show_turn_order(actors: Array) -> void:
 		return
 	for child in _turn_order_row.get_children():
 		child.queue_free()
-	_turn_order_row.visible = not actors.is_empty()
 	if actors.is_empty():
 		return
 
 	var tokens: Array = []
-	var final_gap := 22.0
+	var final_gap := 14.0
 	var initial_actors: Array = actors.duplicate()
 	initial_actors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return int(a["seat_index"]) < int(b["seat_index"])
@@ -756,7 +727,7 @@ func _show_turn_order(actors: Array) -> void:
 	for actor_idx in range(initial_actors.size()):
 		var actor := initial_actors[actor_idx] as Dictionary
 		var token := _make_turn_order_token(actor)
-		token.position = Vector2(float(actor_idx) * (150.0 + final_gap), 8)
+		token.position = Vector2(float(actor_idx) * (110.0 + final_gap), 4)
 		token.set_meta("actor_key", _actor_key(actor))
 		_turn_order_row.add_child(token)
 		tokens.append(token)
@@ -768,12 +739,12 @@ func _show_turn_order(actors: Array) -> void:
 	tw.set_trans(Tween.TRANS_CUBIC)
 	for token in tokens:
 		var target_idx: int = _actor_order_index(actors, String(token.get_meta("actor_key")))
-		var target_x := float(target_idx) * (150.0 + final_gap)
+		var target_x := float(target_idx) * (110.0 + final_gap)
 		tw.tween_property(token, "position:x", target_x, 0.42)
 	await tw.finished
 	for i in range(maxi(actors.size() - 1, 0)):
 		var arrow := _lbl("→", true)
-		arrow.position = Vector2(float(i) * (150.0 + final_gap) + 157.0, 24.0)
+		arrow.position = Vector2(float(i) * (110.0 + final_gap) + 116.0, 16.0)
 		_turn_order_row.add_child(arrow)
 	await get_tree().create_timer(0.55).timeout
 
@@ -799,8 +770,8 @@ func _make_turn_order_token(actor: Dictionary) -> PanelContainer:
 	else:
 		title = "ENEMY %d" % (int(actor["enemy_index"]) + 1)
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(150, 64)
-	panel.add_theme_stylebox_override("panel", _flat_style(color, 6, 8))
+	panel.custom_minimum_size = Vector2(110, 46)
+	panel.add_theme_stylebox_override("panel", _flat_style(color, 6, 6))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 2)
 	panel.add_child(box)
@@ -1233,23 +1204,25 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 			var attack_type: String = String(fx.get("attack_type", "physical"))
 			var ignore_block: bool = bool(fx.get("ignore_block", false))
 			var aoe_adj: bool = bool(fx.get("aoe_adjacent", false))
+			var aoe_all_range: bool = bool(fx.get("aoe_all_in_range", false))
 			var apply_cond: String = String(fx.get("apply_condition", ""))
-			var bonus: int = 2 if player.bless else 0
-			player.bless = false
+			var bless_active: bool = player.bless
 
-			if aoe_adj:
-				# Hit all adjacent enemies — no targeting needed
+			if aoe_adj or aoe_all_range:
 				var hit_any := false
-				for enemy_entry in bs.enemies:
+				var area_targets := _enemies_in_range(player.pos, rng, false)
+				for enemy_entry in area_targets:
 					var enemy: EnemyState = enemy_entry as EnemyState
-					if not enemy.alive or enemy.hidden:
+					if aoe_adj and Pathfinder.manhattan(player.pos, enemy.pos) != 1:
 						continue
-					if Pathfinder.manhattan(player.pos, enemy.pos) != 1:
-						continue
-					var raw: int = int(fx["value"]) + bonus
-					bonus = 0
+					if bless_active and player.bless:
+						player.bless = false
+					var raw: int = _attack_raw_damage(fx, enemy, bless_active)
 					if board_3d:
-						await board_3d.animate_melee_attack(player.pos, enemy.pos)
+						if rng > 1:
+							await board_3d.animate_ranged_attack(player.pos, enemy.pos)
+						else:
+							await board_3d.animate_melee_attack(player.pos, enemy.pos)
 					var actual := bs.apply_damage_enemy(enemy, raw, attack_type, ignore_block)
 					bs.log_msg("  %s hits Enemy %d for %d (→%d HP)" % [player.name, enemy.index + 1, actual, enemy.hp])
 					if apply_cond != "":
@@ -1258,7 +1231,7 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 						_award_xp_for_kill(enemy)
 					hit_any = true
 				if not hit_any:
-					bs.log_msg("  %s's Flurry: no adjacent enemies." % player.name)
+					bs.log_msg("  %s: no enemies in the affected area." % card.card_name)
 				await get_tree().create_timer(0.18).timeout
 				return
 
@@ -1273,7 +1246,9 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 				bs.log_msg("  %s: targeting cancelled." % player.name)
 				await get_tree().create_timer(0.18).timeout
 				return
-			var raw: int = int(fx["value"]) + bonus
+			if bless_active and player.bless:
+				player.bless = false
+			var raw: int = _attack_raw_damage(fx, target, bless_active)
 			var hp_before: int = target.hp
 			if board_3d:
 				if is_ranged:
@@ -1285,8 +1260,8 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 				await board_3d.animate_enemy_hit(target.index)
 			var actual := bs.apply_damage_enemy(target, raw, attack_type, ignore_block)
 			var msg := "  %s deals %d" % [player.name, raw]
-			if bonus > 0:
-				msg += " (+%d Bless)" % (bonus)
+			if bless_active:
+				msg += " (x1.5 Bless)"
 			msg += " — %d absorbed = %d HP lost (Enemy %d: %d→%d)" % [raw - actual, actual, target.index + 1, hp_before, target.hp]
 			bs.log_msg(msg)
 			if apply_cond != "" and target.alive:
@@ -1298,18 +1273,30 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 			await get_tree().create_timer(0.12).timeout
 
 		"heal":
-			var heal_target: PlayerState = await _choose_heal_target(player, fx)
-			if heal_target == null:
+			var heal_targets := _resolve_ally_targets(player, fx)
+			var heal_target_mode := String(fx.get("target", "self"))
+			var uses_direct_target := heal_target_mode == "self_or_ally"
+			if heal_targets.is_empty() and uses_direct_target:
+				var heal_target: PlayerState = await _choose_heal_target(player, fx)
+				if heal_target != null:
+					heal_targets.append(heal_target)
+			if heal_targets.is_empty():
 				return
-			var result_msg: String = heal_target.apply_heal(int(fx.get("value", 0)))
-			bs.log_msg("  %s heals %s: %s" % [player.name, heal_target.name, result_msg])
-			if bool(fx.get("also_bless", false)):
-				heal_target.bless = true
-				bs.log_msg("  %s gains Bless." % heal_target.name)
-			elif bool(fx.get("bless_if_no_conditions", false)):
-				if not heal_target.has_any_condition():
+			for heal_target_entry in heal_targets:
+				var heal_target: PlayerState = heal_target_entry as PlayerState
+				if bool(fx.get("cleanse_all", false)):
+					var cleared := _clear_player_conditions(heal_target, 999)
+					if cleared > 0:
+						bs.log_msg("  %s has all conditions removed." % heal_target.name)
+				var result_msg: String = heal_target.apply_heal(int(fx.get("value", 0)))
+				bs.log_msg("  %s heals %s: %s" % [player.name, heal_target.name, result_msg])
+				if bool(fx.get("also_bless", false)):
 					heal_target.bless = true
-					bs.log_msg("  %s gains Bless (no conditions)." % heal_target.name)
+					bs.log_msg("  %s gains Bless." % heal_target.name)
+				elif bool(fx.get("bless_if_no_conditions", false)):
+					if not heal_target.has_any_condition():
+						heal_target.bless = true
+						bs.log_msg("  %s gains Bless (no conditions)." % heal_target.name)
 			await get_tree().create_timer(0.14).timeout
 
 		"block":
@@ -1323,6 +1310,20 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 						if Pathfinder.manhattan(player.pos, other.pos) <= 1:
 							other.block += fx["value"]
 							bs.log_msg("  %s gains Block %d (→%d)" % [other.name, fx["value"], other.block])
+			elif block_target == "all_allies_in_range":
+				for ally_entry in _allies_in_range(player, int(fx.get("range", 0)), true):
+					var ally: PlayerState = ally_entry as PlayerState
+					var block_value: int = int(fx.get("bless_bonus_value", fx["value"])) if ally.bless else int(fx["value"])
+					ally.block += block_value
+					bs.log_msg("  %s gains Block %d (→%d)" % [ally.name, block_value, ally.block])
+			elif block_target == "self_or_ally":
+				var target: PlayerState = await _choose_heal_target(player, {"range": int(fx.get("range", 0)), "target": "self_or_ally", "value": 0})
+				if target != null:
+					target.block += fx["value"]
+					bs.log_msg("  %s gains Block %d (→%d)" % [target.name, fx["value"], target.block])
+					if bool(fx.get("also_bless", false)):
+						target.bless = true
+						bs.log_msg("  %s gains Bless." % target.name)
 			else:
 				player.block += fx["value"]
 				bs.log_msg("  %s gains Block %d (→%d)" % [player.name, fx["value"], player.block])
@@ -1333,11 +1334,46 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 				bs.log_msg("  %s is entangled — cannot move." % player.name)
 				await get_tree().create_timer(0.14).timeout
 				return
+			# TODO: Jump is preserved as a distinct card effect, but currently uses normal movement pathing.
 			await _resolve_player_move(player, int(fx.get("value", 0)))
 
 		"bless":
+			for ally_entry in _resolve_ally_targets(player, fx):
+				var ally: PlayerState = ally_entry as PlayerState
+				ally.bless = true
+				bs.log_msg("  %s gains Bless." % ally.name)
+			await get_tree().create_timer(0.14).timeout
+
+		"sanctuary":
+			for ally_entry in _allies_in_range(player, int(fx.get("range", 0)), true):
+				var ally: PlayerState = ally_entry as PlayerState
+				ally.damage_immune = true
+				bs.log_msg("  %s cannot take damage this turn." % ally.name)
+			await get_tree().create_timer(0.14).timeout
+
+		"cleanse":
+			var cleanse_target: PlayerState = await _choose_heal_target(player, fx)
+			if cleanse_target != null:
+				var removed := _clear_player_conditions(cleanse_target, int(fx.get("count", 1)))
+				bs.log_msg("  %s removes %d condition(s) from %s." % [player.name, removed, cleanse_target.name])
+				var result_msg: String = cleanse_target.apply_heal(int(fx.get("then_heal", 0)))
+				bs.log_msg("  %s heals %s: %s" % [player.name, cleanse_target.name, result_msg])
+				if removed >= int(fx.get("block_if_cleanse_count", 999)):
+					player.block += 2
+					bs.log_msg("  %s gains Block 2 (→%d)." % [player.name, player.block])
+			await get_tree().create_timer(0.14).timeout
+
+		"bless_self_and_one_adjacent_ally":
 			player.bless = true
 			bs.log_msg("  %s gains Bless." % player.name)
+			var adj_ally: PlayerState = _nearest_living_ally(player.pos, player.seat_index, 1)
+			if adj_ally != null:
+				adj_ally.bless = true
+				bs.log_msg("  %s gains Bless." % adj_ally.name)
+			await get_tree().create_timer(0.14).timeout
+
+		"push", "push_target":
+			bs.log_msg("  %s: forced movement is not implemented yet." % card.card_name) # TODO: implement forced movement and wall-collision stun.
 			await get_tree().create_timer(0.14).timeout
 
 		"slow":
@@ -1409,6 +1445,74 @@ func _choose_heal_target(player: PlayerState, fx: Dictionary) -> PlayerState:
 		return living_allies[0] as PlayerState
 	living_allies.sort_custom(func(a, b) -> bool: return a.hp < b.hp)
 	return living_allies[0] as PlayerState
+
+func _resolve_ally_targets(player: PlayerState, fx: Dictionary) -> Array:
+	var target_mode: String = String(fx.get("target", "self"))
+	match target_mode:
+		"self":
+			return [player]
+		"adjacent_allies":
+			return _allies_in_range(player, 1, false)
+		"self_and_adjacent_allies":
+			return _allies_in_range(player, 1, true)
+		"all_allies_in_range", "self_and_allies_in_range":
+			return _allies_in_range(player, int(fx.get("range", 0)), true)
+	return []
+
+func _allies_in_range(player: PlayerState, max_range: int, include_self: bool) -> Array:
+	var targets: Array = []
+	for player_entry in bs.players:
+		var ally: PlayerState = player_entry as PlayerState
+		if not ally.alive:
+			continue
+		if not include_self and ally.seat_index == player.seat_index:
+			continue
+		if Pathfinder.manhattan(player.pos, ally.pos) <= max_range:
+			targets.append(ally)
+	targets.sort_custom(func(a, b) -> bool: return a.seat_index < b.seat_index)
+	return targets
+
+func _attack_raw_damage(fx: Dictionary, enemy: EnemyState, bless_active: bool) -> int:
+	var raw: int = int(fx["value"])
+	if enemy != null and _is_enemy_undead(enemy):
+		raw *= int(fx.get("undead_multiplier", 1))
+		raw += int(fx.get("undead_bonus", 0))
+	if fx.has("party_bless_bonus"):
+		# TODO: This card text counts Bless cards currently held by allies.
+		# The prototype only tracks a spent-on-attack Bless status, not held Bless cards.
+		pass
+	if bless_active:
+		raw = int(ceil(float(raw) * 1.5))
+	return raw
+
+func _is_enemy_undead(enemy: EnemyState) -> bool:
+	if enemy == null:
+		return false
+	return enemy.enemy_type.begins_with("Undead") or enemy.enemy_type == "AshenSkeleton"
+
+func _clear_player_conditions(player: PlayerState, max_count: int) -> int:
+	if player == null or max_count <= 0:
+		return 0
+	var removed := 0
+	if player.poison and removed < max_count:
+		player.poison = false
+		removed += 1
+	if player.stun and removed < max_count:
+		player.stun = false
+		removed += 1
+	if player.entangle and removed < max_count:
+		player.entangle = false
+		removed += 1
+	if player.hidden and removed < max_count:
+		player.hidden = false
+		removed += 1
+	if player.confused and removed < max_count:
+		player.confused = false
+		removed += 1
+	if player.burn > 0 and removed < max_count:
+		player.burn = 0
+		removed += 1
+	return removed
 
 func _nearest_living_ally(from_pos: Vector2i, excluded_seat: int, max_range: int) -> PlayerState:
 	var best: PlayerState = null
@@ -1885,14 +1989,14 @@ func _show_level_up_overlay(player: PlayerState) -> void:
 	var new_level: int = player.level + 1
 	var class_cards := CardData.get_class_cards_for_level(player.hero_type, new_level)
 	if class_cards.is_empty():
-		player.level += 1
+		player.apply_level_up(-1)
 		bs.log_msg("%s reached Level %d (no class cards available)." % [player.name, player.level])
 		return
 
 	var scene := load("res://LevelUpOverlay.tscn") as PackedScene
 	if scene == null:
 		push_error("LevelUpOverlay.tscn not found")
-		player.level += 1
+		player.apply_level_up(-1)
 		return
 
 	var overlay: Control = scene.instantiate()
@@ -1900,26 +2004,20 @@ func _show_level_up_overlay(player: PlayerState) -> void:
 	add_child(overlay)
 	overlay.setup(player, new_level)
 
-	var result_option := -1
-	var result_cards: Array = []
-	overlay.level_up_confirmed.connect(func(option: int, chosen_names: Array) -> void:
-		result_option = option
-		result_cards = chosen_names
-	)
-
-	await overlay.level_up_confirmed
+	var level_up_result: Array = await overlay.level_up_confirmed
+	var result_option: int = int(level_up_result[0]) if level_up_result.size() > 0 else -1
+	var result_cards: Array = level_up_result[1] if level_up_result.size() > 1 else []
 	overlay.queue_free()
 	await get_tree().process_frame
 
-	player.level += 1
+	player.apply_level_up(result_option)
 	if result_option == 0:
-		player.max_hp += 1
 		bs.log_msg("%s leveled up to %d! +1 Max HP (now %d)." % [player.name, player.level, player.max_hp])
 	elif result_option == 1:
-		player.max_stamina += 1
 		bs.log_msg("%s leveled up to %d! +1 Max Stamina (now %d)." % [player.name, player.level, player.max_stamina])
 	else:
 		bs.log_msg("%s leveled up to %d! (3 class cards)." % [player.name, player.level])
+	bs.log_msg("  %s is healed to max HP and all conditions are removed." % player.name)
 
 	for card_name in result_cards:
 		var card := CardData.from_name(String(card_name))

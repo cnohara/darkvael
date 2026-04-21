@@ -33,6 +33,7 @@ var entangle: bool = false
 var hidden: bool = false
 var confused: bool = false
 var burn: int = 0
+var damage_immune: bool = false
 
 func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i) -> void:
 	seat_index = p_seat_index
@@ -40,12 +41,13 @@ func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i) -> void:
 	hero_type = "Cleric"
 	level = 1
 	xp = 0
-	hp = max_hp
 	max_hp = BASE_MAX_HP
 	max_stamina = BASE_MAX_STAMINA
+	hp = max_hp
 	block = 0
 	_clear_conditions()
 	bless = false
+	damage_immune = false
 	pos = spawn_pos
 	draw_pile = CardData.create_hero_deck(hero_type)
 	draw_pile.shuffle()
@@ -141,6 +143,7 @@ func end_round_cleanup() -> void:
 	entangle = false
 	confused = false
 	hidden = false
+	damage_immune = false
 	draw_to_hand()
 
 func has_any_condition() -> bool:
@@ -155,6 +158,8 @@ func _clear_conditions() -> void:
 	burn = 0
 
 func apply_damage(amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
+	if damage_immune:
+		return 0
 	var remaining := amount
 	if not ignore_block:
 		var absorbed := mini(block, remaining)
@@ -194,6 +199,21 @@ func xp_for_next_level() -> int:
 func can_level_up() -> bool:
 	return level < XP_THRESHOLDS.size() and xp >= xp_for_next_level()
 
+func apply_level_up(option: int) -> void:
+	level += 1
+	match option:
+		0:
+			max_hp += 1
+		1:
+			max_stamina += 1
+	restore_for_level_up()
+
+func restore_for_level_up() -> void:
+	_clear_conditions()
+	bless = false
+	damage_immune = false
+	hp = max_hp
+
 func condition_list() -> String:
 	var parts: Array[String] = []
 	if poison:
@@ -226,6 +246,8 @@ func status_text() -> String:
 		parts.append("Confused")
 	if burn > 0:
 		parts.append("Burn(%d)" % burn)
+	if damage_immune:
+		parts.append("Immune")
 	if not alive:
 		parts.append("Dead")
 	return "" if parts.is_empty() else "[" + ", ".join(parts) + "]"
@@ -255,6 +277,7 @@ func to_dict() -> Dictionary:
 		"hidden": hidden,
 		"confused": confused,
 		"burn": burn,
+		"damage_immune": damage_immune,
 	}
 
 func load_from_dict(data: Dictionary) -> void:
@@ -282,6 +305,7 @@ func load_from_dict(data: Dictionary) -> void:
 	hidden = bool(data.get("hidden", hidden))
 	confused = bool(data.get("confused", confused))
 	burn = int(data.get("burn", burn))
+	damage_immune = bool(data.get("damage_immune", damage_immune))
 
 func _cards_to_names(cards: Array) -> Array:
 	var names: Array = []
