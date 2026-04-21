@@ -32,6 +32,7 @@ var stun: bool = false
 var entangle: bool = false
 var hidden: bool = false
 var confused: bool = false
+var burn: int = 0
 
 func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i) -> void:
 	seat_index = p_seat_index
@@ -143,7 +144,7 @@ func end_round_cleanup() -> void:
 	draw_to_hand()
 
 func has_any_condition() -> bool:
-	return poison or stun or entangle or hidden or confused
+	return poison or stun or entangle or hidden or confused or burn > 0
 
 func _clear_conditions() -> void:
 	poison = false
@@ -151,6 +152,7 @@ func _clear_conditions() -> void:
 	entangle = false
 	hidden = false
 	confused = false
+	burn = 0
 
 func apply_damage(amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
 	var remaining := amount
@@ -166,6 +168,13 @@ func apply_poison_damage() -> int:
 	hp = maxi(hp - 1, 0)
 	alive = hp > 0
 	return 1
+
+func apply_burn_damage() -> int:
+	var dmg := burn
+	hp = maxi(hp - dmg, 0)
+	alive = hp > 0
+	burn = maxi(burn - 1, 0)
+	return dmg
 
 func apply_heal(amount: int) -> String:
 	if has_any_condition():
@@ -197,6 +206,8 @@ func condition_list() -> String:
 		parts.append("Hidden")
 	if confused:
 		parts.append("Confused")
+	if burn > 0:
+		parts.append("Burn(%d)" % burn)
 	return ", ".join(parts)
 
 func status_text() -> String:
@@ -213,6 +224,8 @@ func status_text() -> String:
 		parts.append("Hidden")
 	if confused:
 		parts.append("Confused")
+	if burn > 0:
+		parts.append("Burn(%d)" % burn)
 	if not alive:
 		parts.append("Dead")
 	return "" if parts.is_empty() else "[" + ", ".join(parts) + "]"
@@ -241,6 +254,7 @@ func to_dict() -> Dictionary:
 		"entangle": entangle,
 		"hidden": hidden,
 		"confused": confused,
+		"burn": burn,
 	}
 
 func load_from_dict(data: Dictionary) -> void:
@@ -267,6 +281,7 @@ func load_from_dict(data: Dictionary) -> void:
 	entangle = bool(data.get("entangle", entangle))
 	hidden = bool(data.get("hidden", hidden))
 	confused = bool(data.get("confused", confused))
+	burn = int(data.get("burn", burn))
 
 func _cards_to_names(cards: Array) -> Array:
 	var names: Array = []

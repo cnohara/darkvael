@@ -22,6 +22,10 @@ static func create_deck_for_type(enemy_type: String) -> Array:
 			return _undead_archer_deck()
 		"BlackKnight":
 			return _black_knight_deck()
+		"Nashrat":
+			return _nashrat_deck()
+		"AshenSkeleton":
+			return _ashen_skeleton_deck()
 	return _undead_soldier_deck()
 
 static func _undead_soldier_deck() -> Array:
@@ -89,6 +93,43 @@ static func _black_knight_deck() -> Array:
 			 {"type": "melee_attack", "value": 5, "ignore_block": true}]),
 	]
 
+static func _nashrat_deck() -> Array:
+	return [
+		_make("Scurry Away", 2, "Move 1 away",
+			[{"type": "move_away", "value": 1}]),
+		_make("Bite", 3, "Move 1, Attack 1",
+			[{"type": "move_toward", "value": 1},
+			 {"type": "melee_attack", "value": 1}]),
+		_make("Swarm", 4, "Attack 2",
+			[{"type": "melee_attack", "value": 2}]),
+		_make("Frenzied Rush", 3, "Move 2, Attack 1",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "melee_attack", "value": 1}]),
+		_make("Group Distraction", 4, "Attack 1, Poison",
+			[{"type": "melee_attack", "value": 1, "apply_condition": "poison"}]),
+		_make("Retreat", 2, "Move 3 away",
+			[{"type": "move_away", "value": 3}]),
+	]
+
+static func _ashen_skeleton_deck() -> Array:
+	return [
+		_make("Tainted Slash", 5, "Move 2, Attack 4, Burn",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "melee_attack", "value": 4, "apply_condition": "burn"}]),
+		_make("Cracked Blade", 5, "Move 2, Attack 4",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "melee_attack", "value": 4}]),
+		_make("Splintered Fury", 7, "Move 3, Attack 2 twice",
+			[{"type": "move_toward", "value": 3},
+			 {"type": "multi_melee", "value": 2, "count": 2}]),
+		_make("Boneguard", 4, "Block 3",
+			[{"type": "block", "value": 3}]),
+		_make("Fire Arrow", 6, "Atk 3 Rng3, Burn",
+			[{"type": "ranged_attack", "value": 3, "range": 3, "apply_condition": "burn"}]),
+		_make("Death Rattle", 5, "Attack 4, Entangle",
+			[{"type": "melee_attack", "value": 4, "apply_condition": "entangle"}]),
+	]
+
 static func from_name_for_type(p_behavior_name: String, enemy_type: String) -> BehaviorData:
 	for behavior in create_deck_for_type(enemy_type):
 		var typed: BehaviorData = behavior as BehaviorData
@@ -97,7 +138,7 @@ static func from_name_for_type(p_behavior_name: String, enemy_type: String) -> B
 	return null
 
 static func from_name(p_behavior_name: String) -> BehaviorData:
-	for enemy_type in ["UndeadSoldier", "UndeadArcher", "BlackKnight"]:
+	for enemy_type in ["UndeadSoldier", "UndeadArcher", "BlackKnight", "Nashrat", "AshenSkeleton"]:
 		var result := from_name_for_type(p_behavior_name, enemy_type)
 		if result != null:
 			return result

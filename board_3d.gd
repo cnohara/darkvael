@@ -49,6 +49,15 @@ func get_zoom_size() -> float:
 func set_zoom_size(size: float) -> void:
 	_cam.size = clampf(size, ZOOM_MIN, ZOOM_MAX)
 
+func set_enemy_label(enemy_idx: int, label_text: String) -> void:
+	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size():
+		return
+	var mi: MeshInstance3D = _enemy_mis[enemy_idx]
+	if mi.get_child_count() > 0:
+		var lbl := mi.get_child(0) as Label3D
+		if lbl != null:
+			lbl.text = label_text
+
 func update_board(player_positions: Array, enemy_positions: Array, highlighted: Array, active_player_idx: int = -1) -> void:
 	for y in range(5):
 		for x in range(5):

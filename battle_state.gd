@@ -11,7 +11,7 @@ const MAX_PLAYERS := 4
 const MAX_ENEMIES := 3
 const PASS_INITIATIVE := 99
 
-const ENEMY_TYPES := ["UndeadSoldier", "UndeadArcher", "BlackKnight"]
+const ENEMY_TYPES := ["UndeadSoldier", "UndeadArcher", "BlackKnight", "Nashrat", "AshenSkeleton"]
 
 var player_count: int = 1
 var players: Array = []
@@ -30,6 +30,10 @@ static func enemy_base_stats(enemy_type: String) -> Dictionary:
 			return {"max_hp": 5, "physical_armor": 1, "magic_armor": 0, "xp_reward": 1}
 		"BlackKnight":
 			return {"max_hp": 12, "physical_armor": 5, "magic_armor": 0, "xp_reward": 2}
+		"Nashrat":
+			return {"max_hp": 3, "physical_armor": 0, "magic_armor": 0, "xp_reward": 1}
+		"AshenSkeleton":
+			return {"max_hp": 5, "physical_armor": 2, "magic_armor": 0, "xp_reward": 2}
 	return {"max_hp": 6, "physical_armor": 0, "magic_armor": 0, "xp_reward": 1}
 
 func setup(p_player_count: int) -> void:
@@ -108,6 +112,35 @@ func _pick_enemy_spawn(occupied: Array, desired_min: int) -> Vector2i:
 			if not occupied.has(fallback):
 				return fallback
 	return Vector2i(2, 0)
+
+func setup_new_encounter() -> void:
+	enemies.clear()
+	var enemy_count := randi_range(1, MAX_ENEMIES)
+	var occupied: Array = []
+	for player in players:
+		if player.alive:
+			occupied.append(player.pos)
+	for i in range(enemy_count):
+		var enemy = EnemyState.new()
+		enemy.index = i
+		var et: String = ENEMY_TYPES[randi() % ENEMY_TYPES.size()]
+		enemy.enemy_type = et
+		var stats := enemy_base_stats(et)
+		enemy.max_hp = stats["max_hp"]
+		enemy.hp = enemy.max_hp
+		enemy.physical_armor = stats["physical_armor"]
+		enemy.magic_armor = stats["magic_armor"]
+		enemy.xp_reward = stats["xp_reward"]
+		enemy.block = 0
+		enemy.pos = _pick_enemy_spawn(occupied, 3)
+		enemy.alive = true
+		enemy.draw = BehaviorData.create_deck_for_type(et)
+		enemy.draw.shuffle()
+		enemy.discard = []
+		enemy.revealed = null
+		enemies.append(enemy)
+		occupied.append(enemy.pos)
+	log_msg("A new wave of %d enemies approaches!" % enemy_count)
 
 func start_next_round() -> void:
 	round_number += 1

@@ -21,6 +21,7 @@ var entangle: bool = false
 var hidden: bool = false
 var confused: bool = false
 var slow: bool = false
+var burn: int = 0
 
 func apply_damage(amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
 	var remaining := amount
@@ -41,8 +42,15 @@ func apply_poison_damage() -> int:
 	alive = hp > 0
 	return 1
 
+func apply_burn_damage() -> int:
+	var dmg := burn
+	hp = maxi(hp - dmg, 0)
+	alive = hp > 0
+	burn = maxi(burn - 1, 0)
+	return dmg
+
 func has_any_condition() -> bool:
-	return poison or stun or entangle or hidden or confused or slow
+	return poison or stun or entangle or hidden or confused or slow or burn > 0
 
 func condition_list() -> String:
 	var parts: Array[String] = []
@@ -58,6 +66,8 @@ func condition_list() -> String:
 		parts.append("Confused")
 	if slow:
 		parts.append("Slow")
+	if burn > 0:
+		parts.append("Burn(%d)" % burn)
 	return ", ".join(parts)
 
 func status_text() -> String:
@@ -74,6 +84,8 @@ func status_text() -> String:
 		parts.append("Confused")
 	if slow:
 		parts.append("Slow")
+	if burn > 0:
+		parts.append("Burn(%d)" % burn)
 	if not alive:
 		parts.append("Dead")
 	return "" if parts.is_empty() else "[" + ", ".join(parts) + "]"
@@ -99,6 +111,7 @@ func to_dict() -> Dictionary:
 		"hidden": hidden,
 		"confused": confused,
 		"slow": slow,
+		"burn": burn,
 	}
 
 func load_from_dict(data: Dictionary) -> void:
@@ -123,6 +136,7 @@ func load_from_dict(data: Dictionary) -> void:
 	hidden = bool(data.get("hidden", hidden))
 	confused = bool(data.get("confused", confused))
 	slow = bool(data.get("slow", slow))
+	burn = int(data.get("burn", burn))
 
 func _behaviors_to_names(behaviors: Array) -> Array:
 	var names: Array = []

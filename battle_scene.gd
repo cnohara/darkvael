@@ -531,6 +531,10 @@ func _start_battle() -> void:
 		_update_ui()
 		return
 	bs.setup(requested_player_count)
+	if board_3d != null:
+		for i in range(bs.enemies.size()):
+			var enemy: EnemyState = bs.enemies[i]
+			board_3d.set_enemy_label(i, _enemy_token_label(enemy.enemy_type, i))
 	ui_locked = false
 	highlighted_tiles.clear()
 	_pending_move_player_index = -1
@@ -1119,7 +1123,13 @@ func _run_round() -> void:
 	await _finish_round()
 
 func _apply_start_of_turn_player(player: PlayerState) -> void:
-	# Poison ticks at start of turn; conditions clear in end_round_cleanup
+	# Poison and Burn tick at start of turn; most conditions clear in end_round_cleanup
+	if player.burn > 0:
+		var dmg: int = player.apply_burn_damage()
+		bs.log_msg("  %s suffers %d burn damage (HP→%d), Burn→%d)." % [player.name, dmg, player.hp, player.burn])
+		if board_3d:
+			await board_3d.animate_player_hit(player.seat_index)
+		_update_ui()
 	if player.poison:
 		var dmg: int = player.apply_poison_damage()
 		bs.log_msg("  %s suffers %d poison damage (HP→%d)." % [player.name, dmg, player.hp])
@@ -1128,6 +1138,12 @@ func _apply_start_of_turn_player(player: PlayerState) -> void:
 		_update_ui()
 
 func _apply_start_of_turn_enemy(enemy: EnemyState) -> void:
+	if enemy.burn > 0:
+		var dmg: int = enemy.apply_burn_damage()
+		bs.log_msg("  Enemy %d suffers %d burn damage (HP→%d), Burn→%d)." % [enemy.index + 1, dmg, enemy.hp, enemy.burn])
+		if board_3d:
+			await board_3d.animate_enemy_hit(enemy.index)
+		_update_ui()
 	if enemy.poison:
 		var dmg: int = enemy.apply_poison_damage()
 		bs.log_msg("  Enemy %d suffers %d poison damage (HP→%d)." % [enemy.index + 1, dmg, enemy.hp])
@@ -1149,8 +1165,8 @@ func _check_end() -> bool:
 	if bs.all_enemies_dead():
 		bs.current_phase = BattleState.Phase.VICTORY
 		_update_ui()
-		await get_tree().create_timer(0.4).timeout
-		_show_end(true)
+		await get_tree().create_timer(0.6).timeout
+		await _start_new_encounter()
 		return true
 	if bs.any_player_dead():
 		bs.current_phase = BattleState.Phase.DEFEAT
@@ -1159,6 +1175,27 @@ func _check_end() -> bool:
 		_show_end(false)
 		return true
 	return false
+
+func _start_new_encounter() -> void:
+	await _process_level_up_queue()
+	bs.end_round_cleanup()
+	bs.setup_new_encounter()
+	if board_3d != null:
+		for i in range(BattleState.MAX_ENEMIES):
+			if i < bs.enemies.size():
+				board_3d.set_enemy_label(i, _enemy_token_label(bs.enemies[i].enemy_type, i))
+			else:
+				board_3d.set_enemy_label(i, "")
+	_level_up_queue.clear()
+	ui_locked = false
+	highlighted_tiles.clear()
+	_pending_move_player_index = -1
+	_clear_attack_targeting()
+	bs.current_phase = BattleState.Phase.REFRESH
+	_update_ui()
+	_sync_online_snapshot()
+	await next_round_confirmed
+	_begin_next_round()
 
 # ─── Player Resolution ────────────────────────────────────────────────────────
 
@@ -1487,6 +1524,21 @@ func _resolve_enemy_effect(enemy: EnemyState, fx: Dictionary, effect_index: int 
 			var strike_fx := {"value": val, "attack_type": "physical"}
 			await _enemy_strike(enemy, target, strike_fx, true)
 
+		"move_away":
+			var steps: int = fx["value"]
+			if enemy.slow:
+				steps = maxi(steps - 1, 0)
+				bs.log_msg("  Slow: Enemy %d retreat reduced to %d." % [enemy.index + 1, steps])
+			if enemy.entangle:
+				bs.log_msg("  Enemy %d is entangled — cannot move." % (enemy.index + 1))
+				await get_tree().create_timer(0.14).timeout
+				return
+			await _enemy_move_away(enemy, steps)
+
+		"multi_melee":
+			var count: int = fx.get("count", 2)
+			await _enemy_multi_melee(enemy, fx, count)
+
 func _enemy_preferred_distance(enemy: EnemyState, effect_index: int) -> int:
 	if enemy == null or enemy.revealed == null:
 		return 1
@@ -1495,7 +1547,7 @@ func _enemy_preferred_distance(enemy: EnemyState, effect_index: int) -> int:
 		var fx_type: String = String(fx.get("type", ""))
 		if fx_type == "ranged_attack":
 			return int(fx.get("range", 4))
-		if fx_type == "melee_attack" or fx_type == "apply_condition_if_adj" or fx_type == "executioner_blow":
+		if fx_type == "melee_attack" or fx_type == "apply_condition_if_adj" or fx_type == "executioner_blow" or fx_type == "multi_melee":
 			return 1
 	return 1
 
@@ -1533,6 +1585,66 @@ func _enemy_move(enemy: EnemyState, steps: int, preferred_distance: int = 1) -> 
 			await board_3d.animate_enemy_step(enemy.index, step)
 		bs.log_msg("  Enemy %d moves to %s." % [enemy.index + 1, str(step)])
 		_update_ui()
+
+func _enemy_move_away(enemy: EnemyState, steps: int) -> void:
+	if steps <= 0:
+		return
+	var threat: PlayerState = _nearest_living_player(enemy.pos)
+	if threat == null:
+		return
+	var end_blocked := bs.living_player_positions()
+	for epos in bs.living_enemy_positions(enemy.index):
+		end_blocked.append(epos)
+	var reachable := Pathfinder.get_reachable(enemy.pos, steps, end_blocked)
+	if reachable.is_empty():
+		return
+	var best_dest: Vector2i = enemy.pos
+	var best_dist: int = Pathfinder.manhattan(enemy.pos, threat.pos)
+	for tile in reachable:
+		var tile_pos: Vector2i = tile as Vector2i
+		var d: int = Pathfinder.manhattan(tile_pos, threat.pos)
+		if d > best_dist or (d == best_dist and (tile_pos.x < best_dest.x or (tile_pos.x == best_dest.x and tile_pos.y < best_dest.y))):
+			best_dest = tile_pos
+			best_dist = d
+	if best_dest == enemy.pos:
+		return
+	var path := Pathfinder.find_path(enemy.pos, best_dest, end_blocked)
+	for step in path:
+		enemy.pos = step
+		if board_3d:
+			await board_3d.animate_enemy_step(enemy.index, step)
+		bs.log_msg("  Enemy %d retreats to %s." % [enemy.index + 1, str(step)])
+		_update_ui()
+
+func _enemy_multi_melee(enemy: EnemyState, fx: Dictionary, count: int) -> void:
+	var adj_targets: Array = []
+	for p in bs.players:
+		var player: PlayerState = p as PlayerState
+		if not player.alive or player.hidden:
+			continue
+		if Pathfinder.manhattan(enemy.pos, player.pos) <= 1:
+			adj_targets.append(player)
+	adj_targets.sort_custom(func(a: PlayerState, b: PlayerState) -> bool:
+		return a.seat_index < b.seat_index
+	)
+	if adj_targets.is_empty():
+		bs.log_msg("  Enemy %d: no adjacent targets." % (enemy.index + 1))
+		await get_tree().create_timer(0.16).timeout
+		return
+	var strike_fx := fx.duplicate()
+	if count >= 2 and adj_targets.size() >= 2:
+		await _enemy_strike(enemy, adj_targets[0], strike_fx, true)
+		_update_ui()
+		if bs.any_player_dead():
+			return
+		await _enemy_strike(enemy, adj_targets[1], strike_fx, true)
+	else:
+		var target: PlayerState = adj_targets[0]
+		for i in range(count):
+			await _enemy_strike(enemy, target, strike_fx, true)
+			_update_ui()
+			if bs.any_player_dead() or not target.alive:
+				return
 
 func _enemy_strike(enemy: EnemyState, target: PlayerState, fx: Dictionary, is_melee: bool) -> void:
 	if target == null or target.hidden:
@@ -1623,6 +1735,9 @@ func _nearest_valid_ranged_target(from_pos: Vector2i, max_range: int) -> PlayerS
 			best = player
 			best_dist = dist
 	return best
+
+func _enemy_token_label(_enemy_type: String, idx: int) -> String:
+	return str(idx + 1)
 
 # ─── Targeting Helpers ────────────────────────────────────────────────────────
 
@@ -1721,7 +1836,11 @@ func _apply_condition_to_player(player: PlayerState, condition: String) -> void:
 		"hidden": player.hidden = true
 		"confused": player.confused = true
 		"slow": pass
-	bs.log_msg("  %s gains %s." % [player.name, condition.capitalize()])
+		"burn": player.burn += 1
+	if condition == "burn":
+		bs.log_msg("  %s gains Burn (stacks→%d)." % [player.name, player.burn])
+	else:
+		bs.log_msg("  %s gains %s." % [player.name, condition.capitalize()])
 
 func _apply_condition_to_enemy(enemy: EnemyState, condition: String) -> void:
 	if enemy == null or not enemy.alive:
@@ -1733,7 +1852,11 @@ func _apply_condition_to_enemy(enemy: EnemyState, condition: String) -> void:
 		"hidden": enemy.hidden = true
 		"confused": enemy.confused = true
 		"slow": enemy.slow = true
-	bs.log_msg("  Enemy %d gains %s." % [enemy.index + 1, condition.capitalize()])
+		"burn": enemy.burn += 1
+	if condition == "burn":
+		bs.log_msg("  Enemy %d gains Burn (stacks→%d)." % [enemy.index + 1, enemy.burn])
+	else:
+		bs.log_msg("  Enemy %d gains %s." % [enemy.index + 1, condition.capitalize()])
 
 # ─── XP and Level-Up ─────────────────────────────────────────────────────────
 
