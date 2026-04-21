@@ -2,6 +2,7 @@ class_name Board3D
 extends Node3D
 
 signal tile_pressed(pos: Vector2i)
+signal enemy_pressed(enemy_idx: int)
 
 const TILE_SIZE := 1.0
 const TILE_GAP  := 0.07
@@ -12,7 +13,7 @@ const ZOOM_MAX  := 14.0
 
 var _tile_mats: Array = []
 var _player_mis: Array = []
-var _enemy_mi: MeshInstance3D
+var _enemy_mis: Array = []
 var _cam: Camera3D
 var _player_colors := [
 	Color(0.22, 0.42, 0.88),
@@ -20,6 +21,14 @@ var _player_colors := [
 	Color(0.72, 0.42, 0.92),
 	Color(0.88, 0.66, 0.20),
 ]
+var _enemy_colors := [
+	Color(0.82, 0.18, 0.18),
+	Color(0.84, 0.40, 0.12),
+	Color(0.64, 0.16, 0.42),
+]
+var _targetable_enemy_indices: Array = []
+var _active_target_enemy_idx := -1
+var _enemy_target_tweens: Dictionary = {}
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
@@ -29,7 +38,7 @@ func setup() -> void:
 	_build_tiles()
 	_build_units()
 	_build_camera()
-	update_board([], Vector2i(-1, -1), [], -1)
+	update_board([], [], [], -1)
 
 func adjust_zoom(factor: float) -> void:
 	_cam.size = clampf(_cam.size / factor, ZOOM_MIN, ZOOM_MAX)
@@ -40,7 +49,7 @@ func get_zoom_size() -> float:
 func set_zoom_size(size: float) -> void:
 	_cam.size = clampf(size, ZOOM_MIN, ZOOM_MAX)
 
-func update_board(player_positions: Array, enemy_pos: Vector2i, highlighted: Array, active_player_idx: int = -1) -> void:
+func update_board(player_positions: Array, enemy_positions: Array, highlighted: Array, active_player_idx: int = -1) -> void:
 	for y in range(5):
 		for x in range(5):
 			var mat: StandardMaterial3D = _tile_mats[y * 5 + x]
@@ -66,10 +75,27 @@ func update_board(player_positions: Array, enemy_pos: Vector2i, highlighted: Arr
 				mat.emission_energy_multiplier = 1.4 if i == active_player_idx else 0.0
 		else:
 			mi.visible = false
-	if _enemy_mi != null:
-		_enemy_mi.visible = enemy_pos != Vector2i(-1, -1)
-		if _enemy_mi.visible:
-			_enemy_mi.position = Vector3(float(enemy_pos.x), TILE_H + UNIT_H * 0.5, float(enemy_pos.y))
+	for i in range(_enemy_mis.size()):
+		var enemy_mi: MeshInstance3D = _enemy_mis[i]
+		var mat := enemy_mi.material_override as StandardMaterial3D
+		if i < enemy_positions.size() and enemy_positions[i] != Vector2i(-1, -1):
+			enemy_mi.visible = true
+			var enemy_pos: Vector2i = enemy_positions[i]
+			enemy_mi.position = Vector3(float(enemy_pos.x), TILE_H + UNIT_H * 0.5, float(enemy_pos.y))
+			if mat != null:
+				mat.albedo_color = _enemy_colors[i]
+				mat.emission_enabled = false
+				mat.emission_energy_multiplier = 0.0
+				if _targetable_enemy_indices.has(i):
+					mat.emission_enabled = true
+					mat.emission = Color(0.95, 0.72, 0.18)
+					mat.emission_energy_multiplier = 1.2
+				if i == _active_target_enemy_idx:
+					mat.emission_enabled = true
+					mat.emission = Color(1.0, 0.92, 0.30)
+					mat.emission_energy_multiplier = 2.5
+		else:
+			enemy_mi.visible = false
 
 func flash_tile(pos: Vector2i, color: Color) -> void:
 	var mat: StandardMaterial3D = _tile_mats[pos.y * 5 + pos.x]
@@ -78,14 +104,29 @@ func flash_tile(pos: Vector2i, color: Color) -> void:
 	mat.emission = color
 	mat.emission_energy_multiplier = 1.0
 
+func set_enemy_target_state(selectable_indices: Array, active_enemy_idx: int = -1) -> void:
+	_targetable_enemy_indices = selectable_indices.duplicate()
+	if active_enemy_idx != _active_target_enemy_idx:
+		_stop_enemy_target_pulse(_active_target_enemy_idx)
+		_active_target_enemy_idx = active_enemy_idx
+	if _active_target_enemy_idx >= 0:
+		_start_enemy_target_pulse(_active_target_enemy_idx)
+	for i in range(_enemy_mis.size()):
+		if i != _active_target_enemy_idx:
+			_stop_enemy_target_pulse(i)
+			_enemy_mis[i].scale = Vector3.ONE
+
+func clear_enemy_target_state() -> void:
+	set_enemy_target_state([], -1)
+
 # ── Animations ───────────────────────────────────────────────────────────────
 
 func animate_player_step(player_idx: int, target_grid: Vector2i) -> void:
 	var mi: MeshInstance3D = _player_mis[player_idx]
 	await _animate_step_mesh(mi, target_grid)
 
-func animate_enemy_step(target_grid: Vector2i) -> void:
-	await _animate_step_mesh(_enemy_mi, target_grid)
+func animate_enemy_step(enemy_idx: int, target_grid: Vector2i) -> void:
+	await _animate_step_mesh(_enemy_mis[enemy_idx], target_grid)
 
 func _animate_step_mesh(mi: MeshInstance3D, target_grid: Vector2i) -> void:
 	var from := mi.position
@@ -150,8 +191,8 @@ func animate_melee_attack(from_pos: Vector2i, to_pos: Vector2i) -> void:
 func animate_player_hit(player_idx: int) -> void:
 	await _animate_hit_mesh(_player_mis[player_idx])
 
-func animate_enemy_hit() -> void:
-	await _animate_hit_mesh(_enemy_mi)
+func animate_enemy_hit(enemy_idx: int) -> void:
+	await _animate_hit_mesh(_enemy_mis[enemy_idx])
 
 func _animate_hit_mesh(mi: MeshInstance3D) -> void:
 	var origin := mi.position
@@ -270,9 +311,20 @@ func _build_units() -> void:
 		player_mi.visible = false
 		add_child(player_mi)
 		_player_mis.append(player_mi)
-	_enemy_mi = _unit_mesh(Color(0.82, 0.18, 0.18), "E", Color(1.0, 0.88, 0.70))
-	_enemy_mi.visible = false
-	add_child(_enemy_mi)
+	_enemy_mis.clear()
+	for i in range(3):
+		var enemy_mi := _unit_mesh(_enemy_colors[i], str(i + 1), Color(1.0, 0.88, 0.70))
+		var area := Area3D.new()
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(0.9, UNIT_H + 0.35, 0.9)
+		shape.shape = box
+		area.input_event.connect(_on_enemy_event.bind(i))
+		enemy_mi.add_child(area)
+		area.add_child(shape)
+		enemy_mi.visible = false
+		add_child(enemy_mi)
+		_enemy_mis.append(enemy_mi)
 
 func _unit_mesh(color: Color, label_text: String, label_color: Color) -> MeshInstance3D:
 	var mi  := MeshInstance3D.new()
@@ -286,9 +338,9 @@ func _unit_mesh(color: Color, label_text: String, label_color: Color) -> MeshIns
 	mi.material_override = mat
 	var lbl := Label3D.new()
 	lbl.text = label_text
-	lbl.pixel_size = 0.011
-	lbl.font_size = 64
-	lbl.outline_size = 8
+	lbl.pixel_size = 0.010
+	lbl.font_size = 72
+	lbl.outline_size = 6
 	lbl.modulate = label_color
 	lbl.position = Vector3(0.0, UNIT_H * 0.95, 0.0)
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -310,3 +362,29 @@ func _on_tile_event(_cam_node: Camera3D, ev: InputEvent,
 	if ev is InputEventMouseButton:
 		if ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 			tile_pressed.emit(gpos)
+
+func _on_enemy_event(_cam_node: Camera3D, ev: InputEvent,
+		_ep: Vector3, _n: Vector3, _si: int, enemy_idx: int) -> void:
+	if ev is InputEventMouseButton:
+		if ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			enemy_pressed.emit(enemy_idx)
+
+func _start_enemy_target_pulse(enemy_idx: int) -> void:
+	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size() or _enemy_target_tweens.has(enemy_idx):
+		return
+	var mi: MeshInstance3D = _enemy_mis[enemy_idx]
+	var tw := create_tween()
+	_enemy_target_tweens[enemy_idx] = tw
+	tw.set_loops()
+	tw.set_trans(Tween.TRANS_SINE)
+	tw.set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(mi, "scale", Vector3(1.18, 1.10, 1.18), 0.34)
+	tw.tween_property(mi, "scale", Vector3.ONE, 0.34)
+
+func _stop_enemy_target_pulse(enemy_idx: int) -> void:
+	if not _enemy_target_tweens.has(enemy_idx):
+		return
+	var tw: Tween = _enemy_target_tweens[enemy_idx]
+	if tw != null:
+		tw.kill()
+	_enemy_target_tweens.erase(enemy_idx)

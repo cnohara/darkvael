@@ -31,7 +31,7 @@ func _build_ui() -> void:
 
 	var title_lbl := Label.new()
 	title_lbl.text = "DarkVael Prototype"
-	title_lbl.add_theme_font_size_override("font_size", 42)
+	title_lbl.add_theme_font_size_override("font_size", 56)
 	title_lbl.add_theme_color_override("font_color", Color(0.85, 0.72, 0.28))
 	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title_lbl)
@@ -40,7 +40,7 @@ func _build_ui() -> void:
 
 	var sub_lbl := Label.new()
 	sub_lbl.text = "Single Battle Prototype"
-	sub_lbl.add_theme_font_size_override("font_size", 14)
+	sub_lbl.add_theme_font_size_override("font_size", 24)
 	sub_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.65))
 	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(sub_lbl)
@@ -49,9 +49,11 @@ func _build_ui() -> void:
 
 	var hint_lbl := Label.new()
 	hint_lbl.text = "Each player selects cards from their own hand, marks Ready, then acts in initiative order."
-	hint_lbl.add_theme_font_size_override("font_size", 12)
+	hint_lbl.add_theme_font_size_override("font_size", 18)
 	hint_lbl.add_theme_color_override("font_color", Color(0.5, 0.55, 0.6))
 	hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint_lbl.custom_minimum_size = Vector2(760, 0)
 	vbox.add_child(hint_lbl)
 
 	vbox.add_child(_spacer(48))
@@ -74,7 +76,7 @@ func _build_ui() -> void:
 
 	var count_lbl := Label.new()
 	count_lbl.text = "Choose player count"
-	count_lbl.add_theme_font_size_override("font_size", 13)
+	count_lbl.add_theme_font_size_override("font_size", 18)
 	count_lbl.add_theme_color_override("font_color", Color(0.80, 0.82, 0.90))
 	count_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_player_count_box.add_child(count_lbl)
@@ -85,8 +87,8 @@ func _build_ui() -> void:
 	_player_count_box.add_child(counts)
 	for player_count in [2, 3, 4]:
 		var count_btn := _make_btn("%d Players" % player_count, Color(0.22, 0.36, 0.62))
-		count_btn.custom_minimum_size = Vector2(144, 44)
-		count_btn.add_theme_font_size_override("font_size", 15)
+		count_btn.custom_minimum_size = Vector2(160, 50)
+		count_btn.add_theme_font_size_override("font_size", 18)
 		count_btn.pressed.connect(start_battle.emit.bind(player_count))
 		counts.add_child(count_btn)
 
@@ -104,12 +106,12 @@ func _build_ui() -> void:
 	_server_url_edit = LineEdit.new()
 	_server_url_edit.placeholder_text = "Server URL"
 	_server_url_edit.text = "http://127.0.0.1:8787"
-	_server_url_edit.custom_minimum_size = Vector2(320, 36)
+	_server_url_edit.custom_minimum_size = Vector2(380, 44)
 	_online_host_box.add_child(_server_url_edit)
 
 	var host_go_btn := _make_btn("Create Room Code", Color(0.52, 0.26, 0.20))
-	host_go_btn.custom_minimum_size = Vector2(220, 42)
-	host_go_btn.add_theme_font_size_override("font_size", 16)
+	host_go_btn.custom_minimum_size = Vector2(240, 48)
+	host_go_btn.add_theme_font_size_override("font_size", 18)
 	host_go_btn.pressed.connect(func() -> void:
 		host_online_requested.emit(_server_url_edit.text)
 	)
@@ -129,7 +131,7 @@ func _build_ui() -> void:
 	var join_server_edit := LineEdit.new()
 	join_server_edit.placeholder_text = "Server URL"
 	join_server_edit.text = "http://127.0.0.1:8787"
-	join_server_edit.custom_minimum_size = Vector2(320, 36)
+	join_server_edit.custom_minimum_size = Vector2(380, 44)
 	join_server_edit.text_changed.connect(func(new_text: String) -> void:
 		_server_url_edit.text = new_text
 	)
@@ -137,12 +139,12 @@ func _build_ui() -> void:
 
 	_join_code_edit = LineEdit.new()
 	_join_code_edit.placeholder_text = "Room code"
-	_join_code_edit.custom_minimum_size = Vector2(240, 36)
+	_join_code_edit.custom_minimum_size = Vector2(280, 44)
 	_online_join_box.add_child(_join_code_edit)
 
 	var join_go_btn := _make_btn("Join By Code", Color(0.22, 0.40, 0.62))
-	join_go_btn.custom_minimum_size = Vector2(220, 42)
-	join_go_btn.add_theme_font_size_override("font_size", 16)
+	join_go_btn.custom_minimum_size = Vector2(240, 48)
+	join_go_btn.add_theme_font_size_override("font_size", 18)
 	join_go_btn.pressed.connect(func() -> void:
 		join_online_requested.emit(join_server_edit.text, _join_code_edit.text)
 	)

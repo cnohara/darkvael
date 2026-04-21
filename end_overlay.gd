@@ -22,7 +22,7 @@ func setup(victory: bool) -> void:
 
 	var result_lbl := Label.new()
 	result_lbl.text = "VICTORY!" if victory else "DEFEAT"
-	result_lbl.add_theme_font_size_override("font_size", 52)
+	result_lbl.add_theme_font_size_override("font_size", 60)
 	result_lbl.add_theme_color_override("font_color",
 		Color(0.35, 0.92, 0.35) if victory else Color(0.92, 0.28, 0.28))
 	result_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -43,7 +43,7 @@ func setup(victory: bool) -> void:
 func _make_btn(label: String, color: Color) -> Button:
 	var btn := Button.new()
 	btn.text = label
-	btn.custom_minimum_size = Vector2(220, 52)
+	btn.custom_minimum_size = Vector2(260, 58)
 	var style := StyleBoxFlat.new()
 	style.bg_color = color
 	style.set_corner_radius_all(6)
@@ -51,7 +51,7 @@ func _make_btn(label: String, color: Color) -> Button:
 	var hover := style.duplicate() as StyleBoxFlat
 	hover.bg_color = color.lightened(0.15)
 	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_font_size_override("font_size", 18)
+	btn.add_theme_font_size_override("font_size", 20)
 	btn.add_theme_color_override("font_color", Color.WHITE)
 	return btn
 

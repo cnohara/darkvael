@@ -34,7 +34,7 @@ func _build_ui() -> void:
 	add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(520, 320)
+	panel.custom_minimum_size = Vector2(620, 380)
 	panel.add_theme_stylebox_override("panel", _flat_style(Color(0.11, 0.11, 0.16), 8, 12))
 	center.add_child(panel)
 
@@ -42,22 +42,22 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 10)
 	panel.add_child(vbox)
 
-	title_lbl = _lbl("Online Lobby", true, 30)
+	title_lbl = _lbl("Online Lobby", true, 36)
 	vbox.add_child(title_lbl)
 
 	server_lbl = _lbl("")
 	server_lbl.add_theme_color_override("font_color", Color(0.68, 0.70, 0.78))
 	vbox.add_child(server_lbl)
 
-	code_lbl = _lbl("Room Code: ----", true, 24)
+	code_lbl = _lbl("Room Code: ----", true, 30)
 	code_lbl.add_theme_color_override("font_color", Color(0.96, 0.84, 0.34))
 	vbox.add_child(code_lbl)
 
-	status_lbl = _lbl("Waiting for connection…", false, 18)
+	status_lbl = _lbl("Waiting for connection…", false, 22)
 	status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(status_lbl)
 
-	var tip_lbl := _lbl("Share the room code with your friend. The host can start once the guest is connected.", false, 15)
+	var tip_lbl := _lbl("Share the room code with your friend. The host can start once the guest is connected.", false, 18)
 	tip_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip_lbl.add_theme_color_override("font_color", Color(0.74, 0.74, 0.82))
 	vbox.add_child(tip_lbl)
@@ -70,7 +70,7 @@ func _build_ui() -> void:
 
 	start_btn = Button.new()
 	start_btn.text = "Start Match"
-	start_btn.custom_minimum_size = Vector2(140, 44)
+	start_btn.custom_minimum_size = Vector2(170, 50)
 	_style_btn(start_btn, Color(0.18, 0.45, 0.22))
 	start_btn.pressed.connect(func() -> void:
 		start_requested.emit()
@@ -79,7 +79,7 @@ func _build_ui() -> void:
 
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
-	cancel_btn.custom_minimum_size = Vector2(120, 44)
+	cancel_btn.custom_minimum_size = Vector2(140, 50)
 	_style_btn(cancel_btn, Color(0.35, 0.18, 0.18))
 	cancel_btn.pressed.connect(func() -> void:
 		cancel_requested.emit()
@@ -129,6 +129,7 @@ func _style_btn(btn: Button, color: Color) -> void:
 	btn.add_theme_stylebox_override("normal", _flat_style(color, 6, 8))
 	btn.add_theme_stylebox_override("hover", _flat_style(color.lightened(0.15), 6, 8))
 	btn.add_theme_stylebox_override("pressed", _flat_style(color.darkened(0.12), 6, 8))
+	btn.add_theme_font_size_override("font_size", 18)
 	btn.add_theme_color_override("font_color", Color.WHITE)
 
 func _lbl(text: String, bold: bool = false, font_size: int = 16) -> Label:

@@ -8,14 +8,12 @@ enum Phase {
 }
 
 const MAX_PLAYERS := 4
+const MAX_ENEMIES := 3
 const PASS_INITIATIVE := 99
 
 var player_count: int = 1
 var players: Array = []  # Array[PlayerState]
-var enemy: EnemyState = null
-var enemy_behavior_draw: Array = []
-var enemy_behavior_discard: Array = []
-var revealed_behavior: BehaviorData = null
+var enemies: Array = []  # Array[EnemyState]
 var selected_planning_player_index: int = 0
 
 var current_phase: Phase = Phase.TITLE
@@ -25,23 +23,34 @@ var combat_log: Array = []
 func setup(p_player_count: int) -> void:
 	player_count = clampi(p_player_count, 1, MAX_PLAYERS)
 	players.clear()
+	var spawns := _player_spawn_positions(player_count)
 	for i in range(player_count):
 		var player = PlayerStateScript.new()
-		player.setup_for_battle(i, _player_spawn_positions(player_count)[i])
+		player.setup_for_battle(i, spawns[i])
 		player.draw_to_hand()
 		players.append(player)
 
-	enemy = EnemyState.new()
-	enemy.hp = 10
-	enemy.max_hp = 10
-	enemy.block = 0
-	enemy.pos = Vector2i(2, 0)
-	enemy.slow = false
-	enemy.alive = true
-	enemy_behavior_draw = BehaviorData.create_enemy_deck()
-	enemy_behavior_draw.shuffle()
-	enemy_behavior_discard.clear()
-	revealed_behavior = null
+	enemies.clear()
+	var enemy_count := randi_range(1, MAX_ENEMIES)
+	var occupied: Array = []
+	for player in players:
+		occupied.append(player.pos)
+	for i in range(enemy_count):
+		var enemy = EnemyState.new()
+		enemy.index = i
+		enemy.hp = 10
+		enemy.max_hp = 10
+		enemy.block = 0
+		enemy.pos = _pick_enemy_spawn(occupied, 3)
+		enemy.slow = false
+		enemy.alive = true
+		enemy.draw = BehaviorData.create_enemy_deck()
+		enemy.draw.shuffle()
+		enemy.discard = []
+		enemy.revealed = null
+		enemies.append(enemy)
+		occupied.append(enemy.pos)
+
 	round_number = 0
 	selected_planning_player_index = 0
 	current_phase = Phase.SETUP
@@ -58,30 +67,57 @@ func _player_spawn_positions(count: int) -> Array:
 		_:
 			return [Vector2i(0, 4), Vector2i(1, 4), Vector2i(3, 4), Vector2i(4, 4)]
 
+func _pick_enemy_spawn(occupied: Array, desired_min: int) -> Vector2i:
+	for min_d in range(desired_min, 0, -1):
+		var candidates: Array = []
+		for y in range(5):
+			for x in range(5):
+				var pos := Vector2i(x, y)
+				if occupied.has(pos):
+					continue
+				var ok := true
+				for blocked in occupied:
+					if Pathfinder.manhattan(pos, blocked) < min_d:
+						ok = false
+						break
+				if ok:
+					candidates.append(pos)
+		if not candidates.is_empty():
+			candidates.shuffle()
+			return candidates[0]
+	for y in range(5):
+		for x in range(5):
+			var fallback := Vector2i(x, y)
+			if not occupied.has(fallback):
+				return fallback
+	return Vector2i(2, 0)
+
 func start_next_round() -> void:
 	round_number += 1
 	current_phase = Phase.REVEAL
 	log_msg("=== Round %d ===" % round_number)
-	reveal_enemy_behavior()
+	reveal_enemy_behaviors()
 	current_phase = Phase.SELECT
 	selected_planning_player_index = first_editable_player_index()
 
-func reveal_enemy_behavior() -> void:
-	if enemy == null or not enemy.alive:
-		revealed_behavior = null
-		return
-	if enemy_behavior_draw.is_empty():
-		enemy_behavior_draw = enemy_behavior_discard.duplicate()
-		enemy_behavior_discard.clear()
-		enemy_behavior_draw.shuffle()
-	revealed_behavior = enemy_behavior_draw.pop_front() if not enemy_behavior_draw.is_empty() else null
+func reveal_enemy_behaviors() -> void:
+	for enemy in enemies:
+		if not enemy.alive:
+			enemy.revealed = null
+			continue
+		if enemy.draw.is_empty():
+			enemy.draw = enemy.discard.duplicate()
+			enemy.discard.clear()
+			enemy.draw.shuffle()
+		enemy.revealed = enemy.draw.pop_front() if not enemy.draw.is_empty() else null
 
 func end_round_cleanup() -> void:
 	current_phase = Phase.REFRESH
-	enemy.block = 0
-	if revealed_behavior != null:
-		enemy_behavior_discard.append(revealed_behavior)
-		revealed_behavior = null
+	for enemy in enemies:
+		enemy.block = 0
+		if enemy.revealed != null:
+			enemy.discard.append(enemy.revealed)
+			enemy.revealed = null
 	for player in players:
 		player.end_round_cleanup()
 
@@ -97,8 +133,11 @@ func any_player_dead() -> bool:
 			return true
 	return false
 
-func enemy_dead() -> bool:
-	return enemy == null or not enemy.alive or enemy.hp <= 0
+func all_enemies_dead() -> bool:
+	for enemy in enemies:
+		if enemy.alive and enemy.hp > 0:
+			return false
+	return true
 
 func living_players() -> Array:
 	var result: Array = []
@@ -107,11 +146,15 @@ func living_players() -> Array:
 			result.append(player)
 	return result
 
+func living_enemies() -> Array:
+	var result: Array = []
+	for enemy in enemies:
+		if enemy.alive:
+			result.append(enemy)
+	return result
+
 func player_initiative(player) -> int:
 	return player.initiative()
-
-func enemy_initiative() -> int:
-	return revealed_behavior.initiative if revealed_behavior != null else PASS_INITIATIVE
 
 func build_actor_order(log_passes: bool = true) -> Array:
 	var actors: Array = []
@@ -119,7 +162,6 @@ func build_actor_order(log_passes: bool = true) -> Array:
 		if not player.alive:
 			continue
 		if player.selected.is_empty():
-			# Passing players are deterministic but omitted from actor order.
 			if log_passes:
 				log_msg("%s passes." % player.name)
 			continue
@@ -129,17 +171,15 @@ func build_actor_order(log_passes: bool = true) -> Array:
 			"initiative": player.initiative(),
 			"tie_priority": 0,
 		})
-	if enemy != null and enemy.alive and revealed_behavior != null:
-		actors.append({
-			"actor_type": "enemy",
-			"seat_index": MAX_PLAYERS,
-			"initiative": revealed_behavior.initiative,
-			"tie_priority": 1,
-		})
-	# Deterministic turn order:
-	# 1. lower initiative first
-	# 2. players beat enemy on ties
-	# 3. lower seat index breaks player-vs-player ties
+	for enemy in enemies:
+		if enemy.alive and enemy.revealed != null:
+			actors.append({
+				"actor_type": "enemy",
+				"enemy_index": enemy.index,
+				"seat_index": MAX_PLAYERS + enemy.index,
+				"initiative": enemy.revealed.initiative,
+				"tie_priority": 1,
+			})
 	actors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if a["initiative"] != b["initiative"]:
 			return a["initiative"] < b["initiative"]
@@ -178,9 +218,11 @@ func get_player(seat_index: int):
 		return null
 	return players[seat_index]
 
-# These command-style helpers are the intended seam for later remote input.
-# A future WebRTC transport can validate and forward these calls instead of
-# letting UI code mutate player piles directly.
+func get_enemy(enemy_index: int):
+	if enemy_index < 0 or enemy_index >= enemies.size():
+		return null
+	return enemies[enemy_index]
+
 func select_card(player_id: int, hand_index: int) -> bool:
 	var player = get_player(player_id)
 	if player == null:
@@ -216,16 +258,24 @@ func living_player_positions(excluded_seat: int = -1) -> Array:
 		result.append(player.pos)
 	return result
 
+func living_enemy_positions(excluded_index: int = -1) -> Array:
+	var result: Array = []
+	for enemy in enemies:
+		if not enemy.alive or enemy.index == excluded_index:
+			continue
+		result.append(enemy.pos)
+	return result
+
 func occupied_positions_for_player(excluded_seat: int) -> Array:
 	var blocked = living_player_positions(excluded_seat)
-	if enemy != null and enemy.alive:
-		blocked.append(enemy.pos)
+	for enemy_pos in living_enemy_positions():
+		blocked.append(enemy_pos)
 	return blocked
 
 func apply_damage_player(player, amount: int) -> int:
 	return player.apply_damage(amount)
 
-func apply_damage_enemy(amount: int) -> int:
+func apply_damage_enemy(enemy, amount: int) -> int:
 	if enemy == null:
 		return 0
 	return enemy.apply_damage(amount)
@@ -239,13 +289,13 @@ func to_dict() -> Dictionary:
 	var player_data: Array = []
 	for player in players:
 		player_data.append(player.to_dict())
+	var enemy_data: Array = []
+	for enemy in enemies:
+		enemy_data.append(enemy.to_dict())
 	return {
 		"player_count": player_count,
 		"players": player_data,
-		"enemy": enemy.to_dict() if enemy != null else {},
-		"enemy_behavior_draw": _behaviors_to_names(enemy_behavior_draw),
-		"enemy_behavior_discard": _behaviors_to_names(enemy_behavior_discard),
-		"revealed_behavior": "" if revealed_behavior == null else revealed_behavior.behavior_name,
+		"enemies": enemy_data,
 		"selected_planning_player_index": selected_planning_player_index,
 		"current_phase": int(current_phase),
 		"round_number": round_number,
@@ -259,29 +309,12 @@ func load_from_dict(data: Dictionary) -> void:
 		var player = PlayerStateScript.new()
 		player.load_from_dict(player_entry)
 		players.append(player)
-	if enemy == null:
-		enemy = EnemyState.new()
-	enemy.load_from_dict(data.get("enemy", {}))
-	enemy_behavior_draw = _names_to_behaviors(data.get("enemy_behavior_draw", []))
-	enemy_behavior_discard = _names_to_behaviors(data.get("enemy_behavior_discard", []))
-	var revealed_name := String(data.get("revealed_behavior", ""))
-	revealed_behavior = null if revealed_name == "" else BehaviorData.from_name(revealed_name)
+	enemies.clear()
+	for enemy_entry in data.get("enemies", []):
+		var enemy = EnemyState.new()
+		enemy.load_from_dict(enemy_entry)
+		enemies.append(enemy)
 	selected_planning_player_index = int(data.get("selected_planning_player_index", selected_planning_player_index))
 	current_phase = int(data.get("current_phase", int(current_phase)))
 	round_number = int(data.get("round_number", round_number))
 	combat_log = data.get("combat_log", []).duplicate()
-
-func _behaviors_to_names(behaviors: Array) -> Array:
-	var names: Array = []
-	for behavior in behaviors:
-		var typed_behavior: BehaviorData = behavior as BehaviorData
-		names.append(typed_behavior.behavior_name)
-	return names
-
-func _names_to_behaviors(names: Array) -> Array:
-	var behaviors: Array = []
-	for behavior_name in names:
-		var behavior := BehaviorData.from_name(String(behavior_name))
-		if behavior != null:
-			behaviors.append(behavior)
-	return behaviors
