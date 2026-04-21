@@ -2,7 +2,9 @@ class_name Pathfinder
 
 const BOARD_SIZE := 5
 
-static func get_reachable(from: Vector2i, steps: int, blocked_list: Array) -> Array:
+# Units may pass through occupied tiles but cannot END on them.
+# end_blocked: tiles that cannot be a final destination.
+static func get_reachable(from: Vector2i, steps: int, end_blocked: Array) -> Array:
 	var visited: Dictionary = {}
 	var queue: Array = [[from, 0]]
 	var result: Array = []
@@ -11,21 +13,22 @@ static func get_reachable(from: Vector2i, steps: int, blocked_list: Array) -> Ar
 		var item: Array = queue.pop_front()
 		var pos: Vector2i = item[0]
 		var dist: int = item[1]
-		if pos != from:
+		if pos != from and not end_blocked.has(pos):
 			result.append(pos)
 		if dist >= steps:
 			continue
 		for neighbor in get_neighbors(pos):
-			if blocked_list.has(neighbor):
-				continue
 			if visited.has(neighbor):
 				continue
 			visited[neighbor] = true
 			queue.append([neighbor, dist + 1])
 	return result
 
-static func find_path(from: Vector2i, to: Vector2i, blocked_list: Array) -> Array:
+# Path allows passing through end_blocked tiles but destination must not be in end_blocked.
+static func find_path(from: Vector2i, to: Vector2i, end_blocked: Array) -> Array:
 	if from == to:
+		return []
+	if end_blocked.has(to):
 		return []
 	var visited: Dictionary = {}
 	var parent: Dictionary = {}
@@ -34,8 +37,6 @@ static func find_path(from: Vector2i, to: Vector2i, blocked_list: Array) -> Arra
 	while queue.size() > 0:
 		var pos: Vector2i = queue.pop_front()
 		for neighbor in get_neighbors(pos):
-			if blocked_list.has(neighbor):
-				continue
 			if visited.has(neighbor):
 				continue
 			visited[neighbor] = true

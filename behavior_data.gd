@@ -14,19 +14,91 @@ static func _make(p_name: String, p_init: int, p_text: String, p_fx: Array) -> B
 	b.effects = p_fx
 	return b
 
-static func create_enemy_deck() -> Array:
+static func create_deck_for_type(enemy_type: String) -> Array:
+	match enemy_type:
+		"UndeadSoldier":
+			return _undead_soldier_deck()
+		"UndeadArcher":
+			return _undead_archer_deck()
+		"BlackKnight":
+			return _black_knight_deck()
+	return _undead_soldier_deck()
+
+static func _undead_soldier_deck() -> Array:
 	return [
-		_make("Advance & Strike", 5, "Move 2, atk 2 if adj",
-			[{"type": "move_toward", "value": 2}, {"type": "attack_if_adj", "value": 2}]),
-		_make("Guarded March", 4, "Block 2, move 1 toward",
-			[{"type": "block", "value": 2}, {"type": "move_toward", "value": 1}]),
-		_make("Lunge", 7, "Atk 3 if adj, else move 2",
-			[{"type": "lunge", "attack_value": 3, "move_value": 2}]),
+		_make("Basic Strike", 4, "Move 1, Attack 4",
+			[{"type": "move_toward", "value": 1},
+			 {"type": "melee_attack", "value": 4}]),
+		_make("Entangling Charge", 6, "Move 2, Entangle if adj",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "apply_condition_if_adj", "condition": "entangle"}]),
+		_make("Bomb Toss", 6, "Move 2, AoE Atk 4 Rng3",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "ranged_attack", "value": 4, "range": 3, "aoe": true}]),
+		_make("Poisoned Strike", 5, "Move 2, Attack 4, Poison",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "melee_attack", "value": 4, "apply_condition": "poison"}]),
+		_make("Soldier Shield Bash", 7, "Move 2, Attack 4, Stun",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "melee_attack", "value": 4, "apply_condition": "stun"}]),
+		_make("Undead Fury", 7, "Move 1, Attack 3, Poison",
+			[{"type": "move_toward", "value": 1},
+			 {"type": "melee_attack", "value": 3, "apply_condition": "poison"}]),
 	]
 
-static func from_name(behavior_name: String) -> BehaviorData:
-	for behavior in create_enemy_deck():
-		var typed_behavior: BehaviorData = behavior as BehaviorData
-		if typed_behavior.behavior_name == behavior_name:
-			return typed_behavior
+static func _undead_archer_deck() -> Array:
+	return [
+		_make("Piercing Shot", 5, "Move 2, Atk 2 Rng5 IgnBlock",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "ranged_attack", "value": 2, "range": 5, "ignore_block": true}]),
+		_make("Venomous Strike", 6, "Move 2, Atk 3 Rng4, Poison",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "ranged_attack", "value": 3, "range": 4, "apply_condition": "poison"}]),
+		_make("Rapid Volley", 4, "Move 2, Atk 3 Rng4 x2 targets",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "ranged_attack", "value": 3, "range": 4, "multi_target": 2}]),
+		_make("Hidden Watch", 3, "Hidden",
+			[{"type": "apply_condition_self", "condition": "hidden"}]),
+		_make("Death's Aim", 5, "Move 1, Atk 4 Rng3",
+			[{"type": "move_toward", "value": 1},
+			 {"type": "ranged_attack", "value": 4, "range": 3}]),
+		_make("Cursed Barrage", 6, "Move 3, Atk 2 Rng5, Poison",
+			[{"type": "move_toward", "value": 3},
+			 {"type": "ranged_attack", "value": 2, "range": 5, "apply_condition": "poison"}]),
+	]
+
+static func _black_knight_deck() -> Array:
+	return [
+		_make("Heavy Strike", 6, "Move 1, Atk 4, Block 3",
+			[{"type": "move_toward", "value": 1},
+			 {"type": "melee_attack", "value": 4},
+			 {"type": "block", "value": 3}]),
+		_make("Sweeping Cleave", 5, "Move 3, AoE Atk 4",
+			[{"type": "move_toward", "value": 3},
+			 {"type": "melee_attack", "value": 4, "aoe_adjacent": true}]),
+		_make("Knight Shield Bash", 6, "Move 2, Stun if adj",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "apply_condition_if_adj", "condition": "stun"}]),
+		_make("Guard Stance", 8, "Block 5",
+			[{"type": "block", "value": 5}]),
+		_make("Executioner's Blow", 5, "Move 2, Atk 4 if target HP<=6 else Atk 2",
+			[{"type": "move_toward", "value": 2},
+			 {"type": "executioner_blow", "high_value": 4, "low_value": 2, "hp_threshold": 6}]),
+		_make("Dark Lunge", 7, "Move 4, Atk 5 IgnBlock",
+			[{"type": "move_toward", "value": 4},
+			 {"type": "melee_attack", "value": 5, "ignore_block": true}]),
+	]
+
+static func from_name_for_type(p_behavior_name: String, enemy_type: String) -> BehaviorData:
+	for behavior in create_deck_for_type(enemy_type):
+		var typed: BehaviorData = behavior as BehaviorData
+		if typed.behavior_name == p_behavior_name:
+			return typed
+	return null
+
+static func from_name(p_behavior_name: String) -> BehaviorData:
+	for enemy_type in ["UndeadSoldier", "UndeadArcher", "BlackKnight"]:
+		var result := from_name_for_type(p_behavior_name, enemy_type)
+		if result != null:
+			return result
 	return null

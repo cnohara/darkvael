@@ -11,14 +11,26 @@ const MAX_PLAYERS := 4
 const MAX_ENEMIES := 3
 const PASS_INITIATIVE := 99
 
+const ENEMY_TYPES := ["UndeadSoldier", "UndeadArcher", "BlackKnight"]
+
 var player_count: int = 1
-var players: Array = []  # Array[PlayerState]
-var enemies: Array = []  # Array[EnemyState]
+var players: Array = []
+var enemies: Array = []
 var selected_planning_player_index: int = 0
 
 var current_phase: Phase = Phase.TITLE
 var round_number: int = 0
 var combat_log: Array = []
+
+static func enemy_base_stats(enemy_type: String) -> Dictionary:
+	match enemy_type:
+		"UndeadSoldier":
+			return {"max_hp": 6, "physical_armor": 2, "magic_armor": 0, "xp_reward": 1}
+		"UndeadArcher":
+			return {"max_hp": 5, "physical_armor": 1, "magic_armor": 0, "xp_reward": 1}
+		"BlackKnight":
+			return {"max_hp": 12, "physical_armor": 5, "magic_armor": 0, "xp_reward": 2}
+	return {"max_hp": 6, "physical_armor": 0, "magic_armor": 0, "xp_reward": 1}
 
 func setup(p_player_count: int) -> void:
 	player_count = clampi(p_player_count, 1, MAX_PLAYERS)
@@ -38,13 +50,18 @@ func setup(p_player_count: int) -> void:
 	for i in range(enemy_count):
 		var enemy = EnemyState.new()
 		enemy.index = i
-		enemy.hp = 10
-		enemy.max_hp = 10
+		var et: String = ENEMY_TYPES[randi() % ENEMY_TYPES.size()]
+		enemy.enemy_type = et
+		var stats := enemy_base_stats(et)
+		enemy.max_hp = stats["max_hp"]
+		enemy.hp = enemy.max_hp
+		enemy.physical_armor = stats["physical_armor"]
+		enemy.magic_armor = stats["magic_armor"]
+		enemy.xp_reward = stats["xp_reward"]
 		enemy.block = 0
 		enemy.pos = _pick_enemy_spawn(occupied, 3)
-		enemy.slow = false
 		enemy.alive = true
-		enemy.draw = BehaviorData.create_enemy_deck()
+		enemy.draw = BehaviorData.create_deck_for_type(et)
 		enemy.draw.shuffle()
 		enemy.discard = []
 		enemy.revealed = null
@@ -113,6 +130,10 @@ func end_round_cleanup() -> void:
 	current_phase = Phase.REFRESH
 	for enemy in enemies:
 		enemy.block = 0
+		enemy.slow = false
+		enemy.entangle = false
+		enemy.confused = false
+		enemy.hidden = false
 		if enemy.revealed != null:
 			enemy.discard.append(enemy.revealed)
 			enemy.revealed = null
@@ -150,9 +171,6 @@ func living_enemies() -> Array:
 		if enemy.alive:
 			result.append(enemy)
 	return result
-
-func player_initiative(player) -> int:
-	return player.initiative()
 
 func build_actor_order(log_passes: bool = true) -> Array:
 	var actors: Array = []
@@ -211,15 +229,15 @@ func next_unready_player(from_seat: int, direction: int) -> int:
 			return idx
 	return from_seat
 
-func get_player(seat_index: int):
+func get_player(seat_index: int) -> PlayerState:
 	if seat_index < 0 or seat_index >= players.size():
 		return null
-	return players[seat_index]
+	return players[seat_index] as PlayerState
 
-func get_enemy(enemy_index: int):
+func get_enemy(enemy_index: int) -> EnemyState:
 	if enemy_index < 0 or enemy_index >= enemies.size():
 		return null
-	return enemies[enemy_index]
+	return enemies[enemy_index] as EnemyState
 
 func select_card(player_id: int, hand_index: int) -> bool:
 	var player = get_player(player_id)
@@ -242,6 +260,8 @@ func move_selected_card(player_id: int, selected_index: int, direction: int) -> 
 func set_player_ready(player_id: int, ready: bool) -> bool:
 	var player = get_player(player_id)
 	if player == null or not player.alive:
+		return false
+	if ready and player.selected.size() > player.selection_limit():
 		return false
 	player.ready = ready
 	if ready:
@@ -270,13 +290,13 @@ func occupied_positions_for_player(excluded_seat: int) -> Array:
 		blocked.append(enemy_pos)
 	return blocked
 
-func apply_damage_player(player, amount: int) -> int:
-	return player.apply_damage(amount)
+func apply_damage_player(player: PlayerState, amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
+	return player.apply_damage(amount, attack_type, ignore_block)
 
-func apply_damage_enemy(enemy, amount: int) -> int:
+func apply_damage_enemy(enemy: EnemyState, amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
 	if enemy == null:
 		return 0
-	return enemy.apply_damage(amount)
+	return enemy.apply_damage(amount, attack_type, ignore_block)
 
 func log_msg(msg: String) -> void:
 	combat_log.append(msg)

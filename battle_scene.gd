@@ -3,6 +3,7 @@ extends Control
 signal return_to_title
 signal move_dest_chosen(pos: Vector2i)
 signal attack_target_chosen(enemy_idx: int)
+signal next_round_confirmed
 
 const CARD_PANEL_SIZE := Vector2(102, 104)
 const PLAYER_PANEL_WIDTH := 540
@@ -43,6 +44,7 @@ var online_enabled := false
 var online_is_host := false
 var owned_seat_index := 0
 var _last_guest_snapshot_revision := -1
+var _level_up_queue: Array = []
 
 var round_lbl: Label
 var phase_lbl: Label
@@ -52,6 +54,7 @@ var _turn_order_row: Control = null
 var planning_hint_lbl: Label
 var prev_player_btn: Button
 var next_player_btn: Button
+var next_round_btn: Button
 
 var board_3d: Board3D = null
 var _enemy_panels: Array = []
@@ -72,7 +75,9 @@ var _screen_flash: ColorRect = null
 var _active_resolving_seat := -1
 var _active_resolving_card := -1
 
-var _player_cards: Array = []  # Array[Dictionary]
+var _player_cards: Array = []
+var _rotate_btns: Array = []  # Move rotation buttons: Array[Array[Button]] per seat per hand slot
+var _rotate_block_btns: Array = []  # Block rotation buttons: Array[Array[Button]] per seat per hand slot
 
 func configure_battle(player_count: int) -> void:
 	requested_player_count = clampi(player_count, 1, BattleState.MAX_PLAYERS)
@@ -238,6 +243,8 @@ func _build_players_column(parent: Control) -> void:
 	scroll.add_child(vbox)
 
 	_player_cards.clear()
+	_rotate_btns.clear()
+	_rotate_block_btns.clear()
 	for seat_index in range(BattleState.MAX_PLAYERS):
 		var panel := PanelContainer.new()
 		panel.custom_minimum_size = Vector2(PLAYER_PANEL_WIDTH - 24, 0)
@@ -283,7 +290,7 @@ func _build_players_column(parent: Control) -> void:
 		ready_btn.pressed.connect(_on_ready_pressed.bind(seat_index))
 		header.add_child(ready_btn)
 
-		var meta_lbl := _lbl("Cleric  Draw: 10  Discard: 0  Init: -")
+		var meta_lbl := _lbl("Cleric  Lv1  XP:0  Draw: 16  Discard: 0  Init: -")
 		meta_lbl.add_theme_color_override("font_color", Color(0.64, 0.66, 0.74))
 		panel_vbox.add_child(meta_lbl)
 
@@ -339,11 +346,38 @@ func _build_players_column(parent: Control) -> void:
 		panel_vbox.add_child(hand_row)
 
 		var hand_cards: Array = []
+		var seat_rotate_btns: Array = []
+		var seat_rotate_block_btns: Array = []
 		for hand_idx in range(PLAYER_HAND_SIZE):
+			var slot_vbox := VBoxContainer.new()
+			slot_vbox.add_theme_constant_override("separation", 2)
+			hand_row.add_child(slot_vbox)
+
 			var hand_panel := _make_card_panel()
 			hand_panel.gui_input.connect(_on_hand_card_input.bind(seat_index, hand_idx))
-			hand_row.add_child(hand_panel)
+			slot_vbox.add_child(hand_panel)
 			hand_cards.append(hand_panel)
+
+			var rot_btn := Button.new()
+			rot_btn.text = "\u21bb Mv"
+			rot_btn.custom_minimum_size = Vector2(102, 22)
+			_style_btn(rot_btn, Color(0.28, 0.22, 0.44))
+			rot_btn.add_theme_font_size_override("font_size", 14)
+			rot_btn.pressed.connect(_try_rotate_card.bind(seat_index, hand_idx, "move"))
+			slot_vbox.add_child(rot_btn)
+			seat_rotate_btns.append(rot_btn)
+
+			var block_btn := Button.new()
+			block_btn.text = "\u21bb Blk"
+			block_btn.custom_minimum_size = Vector2(102, 22)
+			_style_btn(block_btn, Color(0.18, 0.32, 0.46))
+			block_btn.add_theme_font_size_override("font_size", 14)
+			block_btn.pressed.connect(_try_rotate_card.bind(seat_index, hand_idx, "block"))
+			slot_vbox.add_child(block_btn)
+			seat_rotate_block_btns.append(block_btn)
+
+		_rotate_btns.append(seat_rotate_btns)
+		_rotate_block_btns.append(seat_rotate_block_btns)
 
 		_player_cards.append({
 			"panel": panel,
@@ -434,7 +468,7 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel.add_child(panel_vbox)
 
 		panel_vbox.add_child(_lbl("Enemy %d" % (i + 1), true))
-		var hp_lbl := _lbl("HP: 10/10")
+		var hp_lbl := _lbl("HP: 6/6")
 		hp_lbl.add_theme_color_override("font_color", ENEMY_HP_BASE_COLOR)
 		panel_vbox.add_child(hp_lbl)
 		_enemy_hp_lbls.append(hp_lbl)
@@ -455,7 +489,7 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel_vbox.add_child(behavior_lbl)
 		_enemy_behavior_lbls.append(behavior_lbl)
 
-		var deck_lbl := _lbl("Draw: 3  Discard: 0")
+		var deck_lbl := _lbl("Draw: 6  Discard: 0")
 		deck_lbl.add_theme_color_override("font_color", Color(0.64, 0.66, 0.74))
 		panel_vbox.add_child(deck_lbl)
 		_enemy_deck_lbls.append(deck_lbl)
@@ -467,14 +501,29 @@ func _build_enemy_panel(parent: Control) -> void:
 		_enemy_prev_status.append(null)
 
 func _build_log(parent: Control) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+
 	log_lbl = Label.new()
 	log_lbl.custom_minimum_size = Vector2(0, 120)
+	log_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_lbl.add_theme_color_override("font_color", Color(0.76, 0.76, 0.84))
 	log_lbl.add_theme_font_size_override("font_size", 18)
 	log_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	parent.add_child(log_lbl)
+	row.add_child(log_lbl)
+
+	next_round_btn = Button.new()
+	next_round_btn.text = "Next Round"
+	next_round_btn.custom_minimum_size = Vector2(124, 40)
+	next_round_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_style_btn(next_round_btn, Color(0.18, 0.38, 0.52))
+	next_round_btn.visible = false
+	next_round_btn.pressed.connect(_on_next_round_pressed)
+	row.add_child(next_round_btn)
 
 func _start_battle() -> void:
+	_level_up_queue.clear()
 	if online_enabled and not online_is_host:
 		ui_locked = true
 		highlighted_tiles.clear()
@@ -491,6 +540,7 @@ func _start_battle() -> void:
 	_sync_online_snapshot()
 
 func _begin_next_round() -> void:
+	_level_up_queue.clear()
 	ui_locked = false
 	highlighted_tiles.clear()
 	_pending_move_player_index = -1
@@ -505,6 +555,8 @@ func _update_ui() -> void:
 	var multiplayer_ui: bool = bs.player_count > 1
 	prev_player_btn.visible = multiplayer_ui
 	next_player_btn.visible = multiplayer_ui
+	next_round_btn.visible = bs.current_phase == BattleState.Phase.REFRESH
+	next_round_btn.disabled = online_enabled and not online_is_host
 	active_player_lbl.visible = multiplayer_ui
 	active_player_lbl.text = "Editing: %s" % _active_player().name
 	order_lbl.text = "Order: %s" % _actor_order_preview()
@@ -518,8 +570,8 @@ func _update_ui() -> void:
 			var prev_enemy_status = _enemy_prev_status[enemy_idx]
 			_enemy_panels[enemy_idx].visible = true
 			_refresh_enemy_panel_visual(enemy_idx)
-			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d" % [enemy.hp, enemy.max_hp]
-			_enemy_block_lbls[enemy_idx].text = "Block: %d" % enemy.block
+			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d  PA:%d" % [enemy.hp, enemy.max_hp, enemy.physical_armor]
+			_enemy_block_lbls[enemy_idx].text = "%s  Block: %d" % [enemy.enemy_type, enemy.block]
 			_enemy_status_lbls[enemy_idx].text = enemy.status_text()
 			_enemy_prev_hp[enemy_idx] = enemy.hp
 			_enemy_prev_block[enemy_idx] = enemy.block
@@ -538,7 +590,7 @@ func _update_ui() -> void:
 				]
 			else:
 				_enemy_behavior_lbls[enemy_idx].text = "Intent: ?"
-			_enemy_deck_lbls[enemy_idx].text = "Draw: %d  Discard: %d" % [enemy.draw.size(), enemy.discard.size()]
+			_enemy_deck_lbls[enemy_idx].text = "Draw: %d  Discard: %d  XP:%d" % [enemy.draw.size(), enemy.discard.size(), enemy.xp_reward]
 		else:
 			_enemy_panels[enemy_idx].visible = false
 			_stop_enemy_panel_target_pulse(enemy_idx)
@@ -564,12 +616,15 @@ func _update_ui() -> void:
 		ui["prev_hp"] = player.hp
 		ui["prev_block"] = player.block
 		ui["prev_status"] = ui["status_lbl"].text
-		ui["meta_lbl"].text = "Draw: %d  Discard: %d  Init: %s" % [
+		ui["meta_lbl"].text = "Lv%d XP:%d/%d  Draw: %d  Discard: %d  Init: %s" % [
+			player.level,
+			player.xp,
+			player.xp_for_next_level(),
 			player.draw_pile.size(),
 			player.discard_pile.size(),
 			"-" if player.selected.is_empty() else str(player.initiative())
 		]
-		ui["stamina_lbl"].text = "Stamina: %d/3" % (3 - player.selected_stamina())
+		ui["stamina_lbl"].text = "Stamina: %d/%d" % [player.max_stamina - player.selected_stamina(), player.max_stamina]
 		if prev_hp != null and int(prev_hp) != player.hp:
 			_pulse_player_stat_label(ui, "hp_lbl", "hp_tween", HP_BASE_COLOR, HP_GAIN_COLOR if player.hp > int(prev_hp) else HP_LOSS_COLOR)
 		if prev_block != null and int(prev_block) != player.block:
@@ -611,7 +666,16 @@ func _update_ui() -> void:
 		for hand_idx in range(PLAYER_HAND_SIZE):
 			var hand_card: CardData = player.hand[hand_idx] if hand_idx < player.hand.size() else null
 			_refresh_card_panel(hand_cards[hand_idx], hand_card, false)
-			hand_cards[hand_idx].mouse_filter = Control.MOUSE_FILTER_STOP if can_edit else Control.MOUSE_FILTER_IGNORE
+			var filter := Control.MOUSE_FILTER_STOP if can_edit else Control.MOUSE_FILTER_IGNORE
+			hand_cards[hand_idx].mouse_filter = filter
+			if seat_index < _rotate_btns.size() and hand_idx < _rotate_btns[seat_index].size():
+				var rot_btn: Button = _rotate_btns[seat_index][hand_idx]
+				rot_btn.visible = can_edit and hand_card != null
+				rot_btn.disabled = not can_edit or hand_card == null or not player.can_select(CardData.create_rotate_move_card(hand_card.card_name, hand_card.initiative))
+			if seat_index < _rotate_block_btns.size() and hand_idx < _rotate_block_btns[seat_index].size():
+				var block_btn: Button = _rotate_block_btns[seat_index][hand_idx]
+				block_btn.visible = can_edit and hand_card != null
+				block_btn.disabled = not can_edit or hand_card == null or not player.can_select(CardData.create_rotate_block_card(hand_card.card_name, hand_card.initiative))
 
 	_update_board()
 	var log_lines: Array = bs.combat_log.slice(maxi(0, bs.combat_log.size() - 8))
@@ -635,39 +699,37 @@ func _planning_hint_text() -> String:
 	if ui_locked:
 		return "Round resolving. Planning input is locked."
 	var player = _active_player()
+	if bs.current_phase == BattleState.Phase.REFRESH:
+		if online_enabled and not online_is_host:
+			return "Round cleanup complete. Waiting for the host to start the next round."
+		return "Round cleanup complete. Press Next Round when you're ready."
 	if bs.current_phase != BattleState.Phase.SELECT:
 		return "Watch the actor order resolve from lowest initiative upward."
 	if player.ready:
 		return "%s is ready. Focus another player or unready to edit." % player.name
-	return "%s is active. Click that player's hand to select up to 3 cards, reorder selected cards, then press Ready." % player.name
+	if player.stun:
+		return "%s is stunned. Choose only 1 card, then press Ready." % player.name
+	return "%s is active. Click hand cards to select, or rotate any card for +1 Move / +1 Block." % player.name
 
 func _phase_text(phase: int) -> String:
 	match phase:
-		BattleState.Phase.SETUP:
-			return "Setup"
-		BattleState.Phase.SELECT:
-			return "Planning"
-		BattleState.Phase.REVEAL:
-			return "Reveal"
-		BattleState.Phase.RESOLVE:
-			return "Resolve"
-		BattleState.Phase.REFRESH:
-			return "Refresh"
-		BattleState.Phase.VICTORY:
-			return "Victory"
-		BattleState.Phase.DEFEAT:
-			return "Defeat"
-		_:
-			return "Title"
+		BattleState.Phase.SETUP: return "Setup"
+		BattleState.Phase.SELECT: return "Planning"
+		BattleState.Phase.REVEAL: return "Reveal"
+		BattleState.Phase.RESOLVE: return "Resolve"
+		BattleState.Phase.REFRESH: return "Refresh"
+		BattleState.Phase.VICTORY: return "Victory"
+		BattleState.Phase.DEFEAT: return "Defeat"
+		_: return "Title"
 
 func _actor_order_preview() -> String:
 	var pieces: Array[String] = []
 	for actor in bs.build_actor_order(false):
 		if actor["actor_type"] == "player":
-			var player = bs.get_player(actor["seat_index"])
+			var player = bs.get_player(int(actor["seat_index"]))
 			pieces.append("%s(%d)" % [player.name, actor["initiative"]])
 		else:
-			pieces.append("Enemy %d(%d)" % [actor["enemy_index"] + 1, actor["initiative"]])
+			pieces.append("E%d(%d)" % [int(actor["enemy_index"]) + 1, actor["initiative"]])
 	if pieces.is_empty():
 		return "all players pass"
 	return " → ".join(pieces)
@@ -718,7 +780,7 @@ func _actor_key(actor: Dictionary) -> String:
 
 func _actor_order_index(actors: Array, key: String) -> int:
 	for i in range(actors.size()):
-		if _actor_key(actors[i]) == key:
+		if _actor_key(actors[i] as Dictionary) == key:
 			return i
 	return 0
 
@@ -727,11 +789,11 @@ func _make_turn_order_token(actor: Dictionary) -> PanelContainer:
 	var title: String = ""
 	var color: Color = Color(0.46, 0.10, 0.10)
 	if is_player:
-		var player = bs.get_player(actor["seat_index"])
+		var player = bs.get_player(int(actor["seat_index"]))
 		title = player.name.to_upper()
 		color = Color(0.12, 0.22, 0.55)
 	else:
-		title = "ENEMY %d" % (actor["enemy_index"] + 1)
+		title = "ENEMY %d" % (int(actor["enemy_index"]) + 1)
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(150, 64)
 	panel.add_theme_stylebox_override("panel", _flat_style(color, 6, 8))
@@ -799,6 +861,13 @@ func _on_focus_player(seat_index: int) -> void:
 	bs.set_active_planning_player(seat_index)
 	_update_ui()
 
+func _on_next_round_pressed() -> void:
+	if bs.current_phase != BattleState.Phase.REFRESH:
+		return
+	if online_enabled and not online_is_host:
+		return
+	next_round_confirmed.emit()
+
 func _on_ready_pressed(seat_index: int) -> void:
 	_toggle_player_ready(bs.get_player(seat_index))
 
@@ -808,6 +877,10 @@ func _toggle_player_ready(player) -> void:
 	if online_enabled and player.seat_index != owned_seat_index:
 		return
 	var new_ready: bool = not player.ready
+	if new_ready and player.selected.size() > player.selection_limit():
+		bs.log_msg("%s is stunned and can only ready 1 selected card." % player.name)
+		_update_ui()
+		return
 	if online_enabled and not online_is_host:
 		online_session.send_command({
 			"kind": "set_ready",
@@ -831,6 +904,9 @@ func _on_hand_card_input(event: InputEvent, seat_index: int, hand_index: int) ->
 func _try_select_hand(player, hand_index: int) -> void:
 	if player == null or not _player_is_editable(player):
 		return
+	if _selection_blocked_by_stun(player):
+		_pulse_stunned_status(player.seat_index)
+		return
 	if online_enabled and not online_is_host:
 		online_session.send_command({
 			"kind": "select_card",
@@ -842,6 +918,58 @@ func _try_select_hand(player, hand_index: int) -> void:
 		return
 	_update_ui()
 	_pulse_stamina_label(player.seat_index, true)
+
+func _try_rotate_card(seat_index: int, hand_index: int, rotation_kind: String) -> void:
+	var player = bs.get_player(seat_index)
+	if player == null or not _player_is_editable(player):
+		return
+	if hand_index < 0 or hand_index >= player.hand.size():
+		return
+	if _selection_blocked_by_stun(player):
+		_pulse_stunned_status(seat_index)
+		return
+	var rotate_card := _make_rotated_card(player, hand_index, rotation_kind)
+	if not player.can_select(rotate_card):
+		return
+	if online_enabled and not online_is_host:
+		online_session.send_command({
+			"kind": "rotate_card",
+			"seat_index": seat_index,
+			"hand_index": hand_index,
+			"rotation_kind": rotation_kind,
+		})
+		return
+	if not _select_rotated_card(player, hand_index, rotation_kind):
+		return
+	var label := "Move" if rotation_kind == "move" else "Block"
+	bs.log_msg("%s rotates %s for +1 %s (costs 1 stamina)." % [player.name, rotate_card.rotated_from_name, label])
+	_update_ui()
+	_pulse_stamina_label(seat_index, true)
+
+func _make_rotated_card(player, hand_index: int, rotation_kind: String) -> CardData:
+	if player == null or hand_index < 0 or hand_index >= player.hand.size():
+		return null
+	var original: CardData = player.hand[hand_index] as CardData
+	if rotation_kind == "block":
+		return CardData.create_rotate_block_card(original.card_name, original.initiative)
+	return CardData.create_rotate_move_card(original.card_name, original.initiative)
+
+func _select_rotated_card(player, hand_index: int, rotation_kind: String) -> bool:
+	var rotate_card := _make_rotated_card(player, hand_index, rotation_kind)
+	if rotate_card == null or not player.can_select(rotate_card):
+		return false
+	player.hand.remove_at(hand_index)
+	player.selected.append(rotate_card)
+	return true
+
+func _selection_blocked_by_stun(player) -> bool:
+	return player != null and player.stun and player.selected.size() >= player.selection_limit()
+
+func _pulse_stunned_status(seat_index: int) -> void:
+	if seat_index < 0 or seat_index >= _player_cards.size():
+		return
+	var ui := _player_cards[seat_index] as Dictionary
+	_pulse_player_stat_label(ui, "status_lbl", "status_tween", STATUS_BASE_COLOR, STATUS_PULSE_COLOR)
 
 func _on_selected_card_input(event: InputEvent, seat_index: int, selected_index: int) -> void:
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
@@ -897,13 +1025,10 @@ func _pulse_stat_label(target_lbl: Label, existing: Tween, base_color: Color, ac
 	tw.set_trans(Tween.TRANS_BACK)
 	tw.tween_property(target_lbl, "scale", Vector2(1.55, 1.55), 0.10)
 	tw.parallel().tween_property(target_lbl, "modulate", accent, 0.08)
-
 	tw.tween_property(target_lbl, "scale", Vector2(0.92, 0.92), 0.09)
 	tw.parallel().tween_property(target_lbl, "modulate", Color.WHITE, 0.09)
-
 	tw.tween_property(target_lbl, "scale", Vector2(1.22, 1.22), 0.08)
 	tw.parallel().tween_property(target_lbl, "modulate", accent, 0.06)
-
 	tw.tween_property(target_lbl, "scale", Vector2.ONE, 0.14)
 	tw.parallel().tween_property(target_lbl, "modulate", Color.WHITE, 0.12)
 	tw.tween_callback(func() -> void:
@@ -927,6 +1052,8 @@ func _on_move_selected_pressed(seat_index: int, selected_index: int, direction: 
 	if bs.move_selected_card(seat_index, selected_index, direction):
 		_update_ui()
 
+# ─── Round Flow ───────────────────────────────────────────────────────────────
+
 func _run_round() -> void:
 	if ui_locked:
 		return
@@ -948,28 +1075,74 @@ func _run_round() -> void:
 	await _show_turn_order(actors)
 	if actors.is_empty():
 		bs.log_msg("No actors this round.")
-		_finish_round()
+		await _finish_round()
 		return
 
 	for actor in actors:
 		if await _check_end():
 			return
 		if actor["actor_type"] == "player":
-			var player = bs.get_player(actor["seat_index"])
+			var player = bs.get_player(int(actor["seat_index"]))
+			if player == null or not player.alive:
+				continue
+			# Start-of-turn: tick poison, clear expired conditions
+			await _apply_start_of_turn_player(player)
+			if not player.alive:
+				_update_ui()
+				if await _check_end():
+					return
+				continue
 			await _resolve_player(player)
+			# Stun clears after player acts
+			player.stun = false
 		else:
-			await _resolve_enemy(bs.get_enemy(actor["enemy_index"]))
+			var enemy = bs.get_enemy(int(actor["enemy_index"]))
+			if enemy == null or not enemy.alive:
+				continue
+			await _apply_start_of_turn_enemy(enemy)
+			if not enemy.alive:
+				_update_ui()
+				if await _check_end():
+					return
+				continue
+			if enemy.stun:
+				bs.log_msg("  Enemy %d is stunned — skips turn." % (enemy.index + 1))
+				enemy.stun = false
+				await get_tree().create_timer(0.25).timeout
+				continue
+			await _resolve_enemy(enemy)
+			enemy.stun = false
 		_update_ui()
 		if await _check_end():
 			return
 
-	_finish_round()
+	await _finish_round()
+
+func _apply_start_of_turn_player(player: PlayerState) -> void:
+	# Poison ticks at start of turn; conditions clear in end_round_cleanup
+	if player.poison:
+		var dmg: int = player.apply_poison_damage()
+		bs.log_msg("  %s suffers %d poison damage (HP→%d)." % [player.name, dmg, player.hp])
+		if board_3d:
+			await board_3d.animate_player_hit(player.seat_index)
+		_update_ui()
+
+func _apply_start_of_turn_enemy(enemy: EnemyState) -> void:
+	if enemy.poison:
+		var dmg: int = enemy.apply_poison_damage()
+		bs.log_msg("  Enemy %d suffers %d poison damage (HP→%d)." % [enemy.index + 1, dmg, enemy.hp])
+		if board_3d:
+			await board_3d.animate_enemy_hit(enemy.index)
+		_update_ui()
 
 func _finish_round() -> void:
 	bs.end_round_cleanup()
-	for enemy in bs.enemies:
-		if enemy.alive:
-			enemy.slow = false
+	await _process_level_up_queue()
+	ui_locked = false
+	bs.log_msg("Round %d cleanup complete. Press Next Round to continue." % bs.round_number)
+	_update_ui()
+	_sync_online_snapshot()
+	await next_round_confirmed
 	_begin_next_round()
 
 func _check_end() -> bool:
@@ -987,13 +1160,19 @@ func _check_end() -> bool:
 		return true
 	return false
 
-func _resolve_player(player) -> void:
+# ─── Player Resolution ────────────────────────────────────────────────────────
+
+func _resolve_player(player: PlayerState) -> void:
 	if player == null or not player.alive:
 		return
 	if player.selected.is_empty():
 		return
+	var was_stunned: bool = player.stun
+	var max_cards: int = 1 if was_stunned else player.selected.size()
+	if was_stunned:
+		bs.log_msg("  %s is stunned — limited to 1 card." % player.name)
 	var selected_cards: Array = player.selected.duplicate()
-	for card_idx in range(selected_cards.size()):
+	for card_idx in range(mini(selected_cards.size(), max_cards)):
 		_set_selected_card_highlight(player.seat_index, card_idx)
 		await get_tree().create_timer(1.0).timeout
 		var card = selected_cards[card_idx]
@@ -1009,78 +1188,166 @@ func _resolve_player(player) -> void:
 				return
 	_clear_selected_card_highlight(player.seat_index)
 
-func _resolve_player_effect(player, fx: Dictionary, card: CardData) -> void:
-	match fx["type"]:
+func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData) -> void:
+	var fx_type: String = String(fx.get("type", ""))
+	match fx_type:
 		"attack":
 			var rng: int = fx.get("range", 1)
+			var attack_type: String = String(fx.get("attack_type", "physical"))
+			var ignore_block: bool = bool(fx.get("ignore_block", false))
+			var aoe_adj: bool = bool(fx.get("aoe_adjacent", false))
+			var apply_cond: String = String(fx.get("apply_condition", ""))
 			var bonus: int = 2 if player.bless else 0
 			player.bless = false
-			var target = await _choose_attack_target(player, rng, card)
-			if target == null:
-				bs.log_msg("  %s fizzled for %s (enemy out of range %d)." % [card.card_name, player.name, rng])
+
+			if aoe_adj:
+				# Hit all adjacent enemies — no targeting needed
+				var hit_any := false
+				for enemy_entry in bs.enemies:
+					var enemy: EnemyState = enemy_entry as EnemyState
+					if not enemy.alive or enemy.hidden:
+						continue
+					if Pathfinder.manhattan(player.pos, enemy.pos) != 1:
+						continue
+					var raw: int = int(fx["value"]) + bonus
+					bonus = 0
+					if board_3d:
+						await board_3d.animate_melee_attack(player.pos, enemy.pos)
+					var actual := bs.apply_damage_enemy(enemy, raw, attack_type, ignore_block)
+					bs.log_msg("  %s hits Enemy %d for %d (→%d HP)" % [player.name, enemy.index + 1, actual, enemy.hp])
+					if apply_cond != "":
+						_apply_condition_to_enemy(enemy, apply_cond)
+					if not enemy.alive:
+						_award_xp_for_kill(enemy)
+					hit_any = true
+				if not hit_any:
+					bs.log_msg("  %s's Flurry: no adjacent enemies." % player.name)
 				await get_tree().create_timer(0.18).timeout
 				return
-			var raw: int = fx["value"] + bonus
-			var absorbed: int = mini(target.block, raw)
+
+			var is_ranged := rng > 1
+			var targets := _enemies_in_range(player.pos, rng, is_ranged)
+			if targets.is_empty():
+				bs.log_msg("  %s fizzled: no valid target in range %d." % [player.name, rng])
+				await get_tree().create_timer(0.18).timeout
+				return
+			var target: EnemyState = await _choose_attack_target(player, targets, card)
+			if target == null:
+				bs.log_msg("  %s: targeting cancelled." % player.name)
+				await get_tree().create_timer(0.18).timeout
+				return
+			var raw: int = int(fx["value"]) + bonus
 			var hp_before: int = target.hp
 			if board_3d:
-				if rng <= 1:
-					await board_3d.animate_melee_attack(player.pos, target.pos)
-				else:
+				if is_ranged:
 					await board_3d.animate_ranged_attack(player.pos, target.pos)
-				if absorbed > 0:
+				else:
+					await board_3d.animate_melee_attack(player.pos, target.pos)
+				if target.block > 0 and not ignore_block:
 					await board_3d.animate_block(target.pos)
 				await board_3d.animate_enemy_hit(target.index)
-			bs.apply_damage_enemy(target, raw)
-			var msg: String = "  %s deals %d" % [player.name, raw]
+			var actual := bs.apply_damage_enemy(target, raw, attack_type, ignore_block)
+			var msg := "  %s deals %d" % [player.name, raw]
 			if bonus > 0:
-				msg += " (+%d Bless)" % bonus
-			if absorbed > 0:
-				msg += " — %d blocked" % absorbed
-			msg += " = %d HP lost (Enemy %d: %d→%d)" % [raw - absorbed, target.index + 1, hp_before, target.hp]
+				msg += " (+%d Bless)" % (bonus)
+			msg += " — %d absorbed = %d HP lost (Enemy %d: %d→%d)" % [raw - actual, actual, target.index + 1, hp_before, target.hp]
 			bs.log_msg(msg)
+			if apply_cond != "" and target.alive:
+				_apply_condition_to_enemy(target, apply_cond)
+			elif apply_cond != "":
+				_apply_condition_to_enemy(target, apply_cond)
+			if not target.alive:
+				_award_xp_for_kill(target)
 			await get_tree().create_timer(0.12).timeout
+
 		"heal":
-			var old_hp: int = player.hp
-			player.hp = mini(player.hp + fx["value"], player.max_hp)
-			player.alive = player.hp > 0
-			bs.log_msg("  %s heals %d (HP %d→%d)" % [player.name, fx["value"], old_hp, player.hp])
+			var heal_target: PlayerState = await _choose_heal_target(player, fx)
+			if heal_target == null:
+				return
+			var result_msg: String = heal_target.apply_heal(int(fx.get("value", 0)))
+			bs.log_msg("  %s heals %s: %s" % [player.name, heal_target.name, result_msg])
+			if bool(fx.get("also_bless", false)):
+				heal_target.bless = true
+				bs.log_msg("  %s gains Bless." % heal_target.name)
+			elif bool(fx.get("bless_if_no_conditions", false)):
+				if not heal_target.has_any_condition():
+					heal_target.bless = true
+					bs.log_msg("  %s gains Bless (no conditions)." % heal_target.name)
 			await get_tree().create_timer(0.14).timeout
+
 		"block":
-			player.block += fx["value"]
-			bs.log_msg("  %s gains Block %d (→%d)" % [player.name, fx["value"], player.block])
+			var block_target: String = String(fx.get("target", "self"))
+			if block_target == "self_and_adjacent_allies":
+				player.block += fx["value"]
+				bs.log_msg("  %s gains Block %d (→%d)" % [player.name, fx["value"], player.block])
+				for other_entry in bs.players:
+					var other: PlayerState = other_entry as PlayerState
+					if other.alive and other.seat_index != player.seat_index:
+						if Pathfinder.manhattan(player.pos, other.pos) <= 1:
+							other.block += fx["value"]
+							bs.log_msg("  %s gains Block %d (→%d)" % [other.name, fx["value"], other.block])
+			else:
+				player.block += fx["value"]
+				bs.log_msg("  %s gains Block %d (→%d)" % [player.name, fx["value"], player.block])
 			await get_tree().create_timer(0.14).timeout
-		"move":
-			await _resolve_player_move(player, fx["value"])
+
+		"move", "jump":
+			if player.entangle:
+				bs.log_msg("  %s is entangled — cannot move." % player.name)
+				await get_tree().create_timer(0.14).timeout
+				return
+			await _resolve_player_move(player, int(fx.get("value", 0)))
+
 		"bless":
 			player.bless = true
 			bs.log_msg("  %s gains Bless." % player.name)
 			await get_tree().create_timer(0.14).timeout
+
 		"slow":
-			var target = _nearest_enemy_to_player(player.pos)
-			if target != null:
-				target.slow = true
-				bs.log_msg("  Enemy %d gains Slow." % (target.index + 1))
+			var nearest: EnemyState = _nearest_enemy_to_player(player.pos)
+			if nearest != null:
+				nearest.slow = true
+				bs.log_msg("  Enemy %d gains Slow." % (nearest.index + 1))
 			await get_tree().create_timer(0.14).timeout
 
-func _resolve_player_move(player, budget: int) -> void:
-	var blocked = bs.occupied_positions_for_player(player.seat_index)
-	var reachable = Pathfinder.get_reachable(player.pos, budget, blocked)
+		"votive_step_bonus":
+			var adj_ally = _nearest_living_ally(player.pos, player.seat_index, 1)
+			if adj_ally != null:
+				adj_ally.block += 2
+				bs.log_msg("  %s adjacent to %s — grants Block 2 (→%d)." % [player.name, adj_ally.name, adj_ally.block])
+				if not adj_ally.entangle:
+					await _resolve_player_move(adj_ally, 1)
+			await get_tree().create_timer(0.10).timeout
+
+		"guiding_chant":
+			var rng: int = fx.get("range", 3)
+			var val: int = fx.get("value", 2)
+			var gc_target = await _choose_heal_target(player, {"range": rng, "target": "self_or_ally", "value": 0})
+			if gc_target != null:
+				gc_target.block += val
+				bs.log_msg("  %s grants %s Block %d (→%d)." % [player.name, gc_target.name, val, gc_target.block])
+				if gc_target.seat_index != player.seat_index and not gc_target.entangle:
+					await _resolve_player_move(gc_target, 1)
+			await get_tree().create_timer(0.14).timeout
+
+func _resolve_player_move(player: PlayerState, budget: int) -> void:
+	var end_blocked := bs.occupied_positions_for_player(player.seat_index)
+	var reachable := Pathfinder.get_reachable(player.pos, budget, end_blocked)
 	if reachable.is_empty():
-		bs.log_msg("  %s's move fizzled: no reachable tiles." % player.name)
+		bs.log_msg("  %s's move: no reachable tiles." % player.name)
 		return
 	_pending_move_player_index = player.seat_index
 	highlighted_tiles = reachable
 	_update_board()
 	_sync_online_snapshot()
-	bs.log_msg("  %s choose a destination tile." % player.name)
+	bs.log_msg("  %s: choose a destination tile." % player.name)
 	var dest: Vector2i = await move_dest_chosen
 	highlighted_tiles.clear()
 	_pending_move_player_index = -1
 	_update_board()
-	var path = Pathfinder.find_path(player.pos, dest, blocked)
+	var path := Pathfinder.find_path(player.pos, dest, end_blocked)
 	if path.is_empty() and dest != player.pos:
-		bs.log_msg("  %s's move fizzled: path blocked." % player.name)
+		bs.log_msg("  %s: path not found." % player.name)
 		return
 	for step in path:
 		player.pos = step
@@ -1089,92 +1356,281 @@ func _resolve_player_move(player, budget: int) -> void:
 		_update_ui()
 	bs.log_msg("  %s moves to %s." % [player.name, str(dest)])
 
-func _resolve_enemy(enemy) -> void:
+func _choose_heal_target(player: PlayerState, fx: Dictionary) -> PlayerState:
+	var target_mode: String = String(fx.get("target", "self"))
+	if target_mode == "self":
+		return player
+	var rng: int = fx.get("range", 0)
+	var living_allies: Array = []
+	for p in bs.players:
+		var ally: PlayerState = p as PlayerState
+		if ally.alive and Pathfinder.manhattan(player.pos, ally.pos) <= rng:
+			living_allies.append(ally)
+	if living_allies.is_empty():
+		return player
+	if living_allies.size() == 1:
+		return living_allies[0] as PlayerState
+	living_allies.sort_custom(func(a, b) -> bool: return a.hp < b.hp)
+	return living_allies[0] as PlayerState
+
+func _nearest_living_ally(from_pos: Vector2i, excluded_seat: int, max_range: int) -> PlayerState:
+	var best: PlayerState = null
+	var best_dist := 999
+	for p in bs.players:
+		var player: PlayerState = p as PlayerState
+		if not player.alive or player.seat_index == excluded_seat:
+			continue
+		var dist := Pathfinder.manhattan(from_pos, player.pos)
+		if dist > max_range:
+			continue
+		if dist < best_dist:
+			best = player
+			best_dist = dist
+	return best
+
+# ─── Enemy Resolution ─────────────────────────────────────────────────────────
+
+func _resolve_enemy(enemy: EnemyState) -> void:
 	if enemy == null or not enemy.alive or enemy.revealed == null:
+		return
+	if enemy.hidden:
+		bs.log_msg("◀ Enemy %d is hidden — skips revealed action." % (enemy.index + 1))
+		await get_tree().create_timer(0.18).timeout
 		return
 	bs.log_msg("◀ Enemy %d: %s" % [enemy.index + 1, enemy.revealed.behavior_name])
 	_update_ui()
 	await get_tree().create_timer(0.2).timeout
-	for effect in enemy.revealed.effects:
-		await _resolve_enemy_effect(enemy, effect)
+	for effect_index in range(enemy.revealed.effects.size()):
+		var effect: Dictionary = enemy.revealed.effects[effect_index]
+		await _resolve_enemy_effect(enemy, effect, effect_index)
 		_update_ui()
 		if bs.all_enemies_dead() or bs.any_player_dead():
 			return
 
-func _resolve_enemy_effect(enemy, fx: Dictionary) -> void:
-	match fx["type"]:
+func _resolve_enemy_effect(enemy: EnemyState, fx: Dictionary, effect_index: int = -1) -> void:
+	var fx_type: String = String(fx.get("type", ""))
+	match fx_type:
 		"block":
 			enemy.block += fx["value"]
 			bs.log_msg("  Enemy %d gains Block %d (→%d)." % [enemy.index + 1, fx["value"], enemy.block])
 			await get_tree().create_timer(0.14).timeout
+
 		"move_toward":
 			var steps: int = fx["value"]
 			if enemy.slow:
 				steps = maxi(steps - 1, 0)
-				bs.log_msg("  Slow reduces enemy %d move to %d." % [enemy.index + 1, steps])
-			await _enemy_move(enemy, steps)
-		"attack_if_adj":
-			await _enemy_attack_if_adj(enemy, fx["value"], false)
-		"lunge":
-			var target = _nearest_living_player(enemy.pos)
-			if target != null and Pathfinder.manhattan(enemy.pos, target.pos) <= 1:
-				await _enemy_attack_if_adj(enemy, fx["attack_value"], true)
+				bs.log_msg("  Slow: Enemy %d move reduced to %d." % [enemy.index + 1, steps])
+			if enemy.entangle:
+				bs.log_msg("  Enemy %d is entangled — cannot move." % (enemy.index + 1))
+				await get_tree().create_timer(0.14).timeout
+				return
+			await _enemy_move(enemy, steps, _enemy_preferred_distance(enemy, effect_index))
+
+		"melee_attack":
+			var target: PlayerState = _nearest_living_player(enemy.pos)
+			if target == null:
+				return
+			if Pathfinder.manhattan(enemy.pos, target.pos) > 1:
+				bs.log_msg("  Enemy %d: not adjacent to target." % (enemy.index + 1))
+				await get_tree().create_timer(0.16).timeout
+				return
+			await _enemy_strike(enemy, target, fx, true)
+
+		"ranged_attack":
+			var rng: int = fx.get("range", 4)
+			var is_aoe: bool = bool(fx.get("aoe", false))
+			var multi: int = fx.get("multi_target", 0)
+			if is_aoe:
+				var aoe_target: PlayerState = _nearest_valid_ranged_target(enemy.pos, rng)
+				if aoe_target == null:
+					bs.log_msg("  Enemy %d: no ranged target." % (enemy.index + 1))
+					await get_tree().create_timer(0.16).timeout
+					return
+				await _enemy_aoe_strike(enemy, aoe_target.pos, fx)
+			elif multi > 1:
+				await _enemy_multi_strike(enemy, rng, fx, multi)
 			else:
-				var steps: int = fx["move_value"]
-				if enemy.slow:
-					steps = maxi(steps - 1, 0)
-				await _enemy_move(enemy, steps)
+				var target: PlayerState = _nearest_valid_ranged_target(enemy.pos, rng)
+				if target == null:
+					bs.log_msg("  Enemy %d: no ranged target." % (enemy.index + 1))
+					await get_tree().create_timer(0.16).timeout
+					return
+				await _enemy_strike(enemy, target, fx, false)
 
-func _enemy_move(enemy, steps: int) -> void:
-	for _step in range(steps):
-		var target = _nearest_living_player(enemy.pos)
-		if target == null:
-			return
-		var blocked = bs.living_player_positions()
-		for pos in bs.living_enemy_positions(enemy.index):
-			blocked.append(pos)
-		var next: Vector2i = _best_step_toward(enemy.pos, target.pos, blocked)
-		if next == Vector2i(-1, -1):
-			return
-		enemy.pos = next
-		if board_3d:
-			await board_3d.animate_enemy_step(enemy.index, next)
-		bs.log_msg("  Enemy %d moves to %s." % [enemy.index + 1, str(next)])
-		_update_ui()
+		"apply_condition_if_adj":
+			var target: PlayerState = _nearest_living_player(enemy.pos)
+			if target == null:
+				return
+			if Pathfinder.manhattan(enemy.pos, target.pos) > 1:
+				bs.log_msg("  Enemy %d: not adjacent — condition fizzled." % (enemy.index + 1))
+				await get_tree().create_timer(0.16).timeout
+				return
+			var cond: String = String(fx.get("condition", ""))
+			_apply_condition_to_player(target, cond)
+			await get_tree().create_timer(0.14).timeout
 
-func _enemy_attack_if_adj(enemy, raw: int, is_lunge: bool) -> void:
-	var target = _nearest_living_player(enemy.pos)
+		"apply_condition_self":
+			var cond: String = String(fx.get("condition", ""))
+			_apply_condition_to_enemy(enemy, cond)
+			await get_tree().create_timer(0.14).timeout
+
+		"executioner_blow":
+			var target: PlayerState = _nearest_living_player(enemy.pos)
+			if target == null:
+				return
+			if Pathfinder.manhattan(enemy.pos, target.pos) > 1:
+				bs.log_msg("  Enemy %d: not adjacent." % (enemy.index + 1))
+				await get_tree().create_timer(0.16).timeout
+				return
+			var threshold: int = fx.get("hp_threshold", 6)
+			var val: int = int(fx["high_value"] if target.hp <= threshold else fx["low_value"])
+			var strike_fx := {"value": val, "attack_type": "physical"}
+			await _enemy_strike(enemy, target, strike_fx, true)
+
+func _enemy_preferred_distance(enemy: EnemyState, effect_index: int) -> int:
+	if enemy == null or enemy.revealed == null:
+		return 1
+	for i in range(effect_index + 1, enemy.revealed.effects.size()):
+		var fx: Dictionary = enemy.revealed.effects[i]
+		var fx_type: String = String(fx.get("type", ""))
+		if fx_type == "ranged_attack":
+			return int(fx.get("range", 4))
+		if fx_type == "melee_attack" or fx_type == "apply_condition_if_adj" or fx_type == "executioner_blow":
+			return 1
+	return 1
+
+func _enemy_move(enemy: EnemyState, steps: int, preferred_distance: int = 1) -> void:
+	if steps <= 0:
+		return
+	var target: PlayerState = _nearest_living_player(enemy.pos)
 	if target == null:
 		return
-	if Pathfinder.manhattan(enemy.pos, target.pos) > 1:
-		bs.log_msg("  Enemy %d is not adjacent to any hero." % (enemy.index + 1))
-		await get_tree().create_timer(0.16).timeout
+	var end_blocked := bs.living_player_positions()
+	for pos in bs.living_enemy_positions(enemy.index):
+		end_blocked.append(pos)
+	var reachable := Pathfinder.get_reachable(enemy.pos, steps, end_blocked)
+	if reachable.is_empty():
 		return
-	var absorbed: int = mini(target.block, raw)
+	var best_dest: Vector2i = enemy.pos
+	var preferred: int = maxi(preferred_distance, 1)
+	var best_score: int = abs(Pathfinder.manhattan(enemy.pos, target.pos) - preferred)
+	var best_steps_used: int = 0
+	for tile in reachable:
+		var tile_pos: Vector2i = tile as Vector2i
+		var d: int = Pathfinder.manhattan(tile_pos, target.pos)
+		var score: int = abs(d - preferred)
+		var path_len: int = Pathfinder.manhattan(enemy.pos, tile_pos)
+		if score < best_score or (score == best_score and path_len < best_steps_used):
+			best_dest = tile_pos
+			best_score = score
+			best_steps_used = path_len
+	if best_dest == enemy.pos:
+		return
+	var path := Pathfinder.find_path(enemy.pos, best_dest, end_blocked)
+	for step in path:
+		enemy.pos = step
+		if board_3d:
+			await board_3d.animate_enemy_step(enemy.index, step)
+		bs.log_msg("  Enemy %d moves to %s." % [enemy.index + 1, str(step)])
+		_update_ui()
+
+func _enemy_strike(enemy: EnemyState, target: PlayerState, fx: Dictionary, is_melee: bool) -> void:
+	if target == null or target.hidden:
+		return
+	var raw: int = fx.get("value", 0)
+	var attack_type: String = String(fx.get("attack_type", "physical"))
+	var ignore_block: bool = bool(fx.get("ignore_block", false))
+	var apply_cond: String = String(fx.get("apply_condition", ""))
 	var hp_before: int = target.hp
 	if board_3d:
-		await board_3d.animate_melee_attack(enemy.pos, target.pos)
-		if absorbed > 0:
+		if is_melee:
+			await board_3d.animate_melee_attack(enemy.pos, target.pos)
+		else:
+			await board_3d.animate_ranged_attack(enemy.pos, target.pos)
+		if target.block > 0 and not ignore_block:
 			await board_3d.animate_block(target.pos)
 		await board_3d.animate_player_hit(target.seat_index)
-	bs.apply_damage_player(target, raw)
-	await _flash_red_screen()
-	var msg: String = "  Enemy %d %s %s for %d" % [
+	var actual := bs.apply_damage_player(target, raw, attack_type, ignore_block)
+	if actual > 0:
+		await _flash_red_screen()
+	var msg := "  Enemy %d %s %s for %d — %d HP lost (%d→%d)" % [
 		enemy.index + 1,
-		"lunges at" if is_lunge else "hits",
-		target.name,
-		raw,
+		"strikes" if is_melee else "shoots",
+		target.name, raw, actual, hp_before, target.hp
 	]
-	if absorbed > 0:
-		msg += " — %d blocked" % absorbed
-	msg += " = %d HP lost (%s: %d→%d)" % [raw - absorbed, target.name, hp_before, target.hp]
 	bs.log_msg(msg)
+	if apply_cond != "":
+		_apply_condition_to_player(target, apply_cond)
 	await get_tree().create_timer(0.12).timeout
 
-func _nearest_enemy_to_player(from_pos: Vector2i, max_range: int = 99):
-	var best = null
+func _enemy_aoe_strike(enemy: EnemyState, center_pos: Vector2i, fx: Dictionary) -> void:
+	var raw: int = fx.get("value", 0)
+	var attack_type: String = String(fx.get("attack_type", "physical"))
+	var ignore_block: bool = bool(fx.get("ignore_block", false))
+	var apply_cond: String = String(fx.get("apply_condition", ""))
+	if board_3d:
+		await board_3d.animate_ranged_attack(enemy.pos, center_pos)
+	bs.log_msg("  Enemy %d AoE at %s!" % [enemy.index + 1, str(center_pos)])
+	for player in bs.players:
+		var target: PlayerState = player as PlayerState
+		if not target.alive or target.hidden:
+			continue
+		var dx: int = abs(target.pos.x - center_pos.x)
+		var dy: int = abs(target.pos.y - center_pos.y)
+		if dx <= 1 and dy <= 1:
+			var hp_before: int = target.hp
+			var actual := bs.apply_damage_player(target, raw, attack_type, ignore_block)
+			if actual > 0:
+				await _flash_red_screen()
+			bs.log_msg("  %s hit by AoE: %d HP lost (%d→%d)" % [target.name, actual, hp_before, target.hp])
+			if apply_cond != "":
+				_apply_condition_to_player(target, apply_cond)
+	await get_tree().create_timer(0.16).timeout
+
+func _enemy_multi_strike(enemy: EnemyState, rng: int, fx: Dictionary, count: int) -> void:
+	var targets: Array = []
+	for p in bs.players:
+		var player: PlayerState = p as PlayerState
+		if not player.alive or player.hidden:
+			continue
+		var dist := Pathfinder.manhattan(enemy.pos, player.pos)
+		if dist > 1 and dist <= rng:
+			targets.append(player)
+	targets.sort_custom(func(a, b) -> bool:
+		return Pathfinder.manhattan(enemy.pos, a.pos) < Pathfinder.manhattan(enemy.pos, b.pos)
+	)
+	var hit_count := mini(count, targets.size())
+	for i in range(hit_count):
+		await _enemy_strike(enemy, targets[i] as PlayerState, fx, false)
+		_update_ui()
+		if bs.any_player_dead():
+			return
+	if hit_count == 0:
+		bs.log_msg("  Enemy %d: no valid ranged targets." % (enemy.index + 1))
+		await get_tree().create_timer(0.16).timeout
+
+func _nearest_valid_ranged_target(from_pos: Vector2i, max_range: int) -> PlayerState:
+	var best: PlayerState = null
+	var best_dist := 999
+	for p in bs.players:
+		var player: PlayerState = p as PlayerState
+		if not player.alive or player.hidden:
+			continue
+		var dist := Pathfinder.manhattan(from_pos, player.pos)
+		if dist <= 1 or dist > max_range:
+			continue
+		if dist < best_dist or (dist == best_dist and best != null and player.seat_index < best.seat_index):
+			best = player
+			best_dist = dist
+	return best
+
+# ─── Targeting Helpers ────────────────────────────────────────────────────────
+
+func _nearest_enemy_to_player(from_pos: Vector2i, max_range: int = 99) -> EnemyState:
+	var best: EnemyState = null
 	var best_dist: int = 999
-	for enemy in bs.enemies:
+	for enemy_entry in bs.enemies:
+		var enemy: EnemyState = enemy_entry as EnemyState
 		if not enemy.alive:
 			continue
 		var dist: int = Pathfinder.manhattan(from_pos, enemy.pos)
@@ -1187,13 +1643,18 @@ func _nearest_enemy_to_player(from_pos: Vector2i, max_range: int = 99):
 			best = enemy
 	return best
 
-func _enemies_in_range(from_pos: Vector2i, max_range: int) -> Array:
+func _enemies_in_range(from_pos: Vector2i, max_range: int, ranged: bool = false) -> Array:
 	var targets: Array = []
-	for enemy in bs.enemies:
-		if not enemy.alive:
+	for enemy_entry in bs.enemies:
+		var enemy: EnemyState = enemy_entry as EnemyState
+		if not enemy.alive or enemy.hidden:
 			continue
-		if Pathfinder.manhattan(from_pos, enemy.pos) <= max_range:
-			targets.append(enemy)
+		var dist := Pathfinder.manhattan(from_pos, enemy.pos)
+		if dist > max_range:
+			continue
+		if ranged and dist <= 1:
+			continue
+		targets.append(enemy)
 	targets.sort_custom(func(a, b) -> bool:
 		var da: int = Pathfinder.manhattan(from_pos, a.pos)
 		var db: int = Pathfinder.manhattan(from_pos, b.pos)
@@ -1203,16 +1664,16 @@ func _enemies_in_range(from_pos: Vector2i, max_range: int) -> Array:
 	)
 	return targets
 
-func _choose_attack_target(player, rng: int, card: CardData):
-	var targets := _enemies_in_range(player.pos, rng)
+func _choose_attack_target(player: PlayerState, targets: Array, card: CardData) -> EnemyState:
 	if targets.is_empty():
 		return null
 	if targets.size() == 1:
-		return targets[0]
+		return targets[0] as EnemyState
 
 	_pending_attack_player_index = player.seat_index
 	_targetable_enemy_indices.clear()
-	for enemy in targets:
+	for enemy_entry in targets:
+		var enemy: EnemyState = enemy_entry as EnemyState
 		_targetable_enemy_indices.append(enemy.index)
 	_active_target_enemy_idx = -1
 	bs.log_msg("  %s: tap an enemy to target, then tap again to attack." % card.card_name)
@@ -1221,23 +1682,23 @@ func _choose_attack_target(player, rng: int, card: CardData):
 
 	var chosen_idx: int = await attack_target_chosen
 	for enemy in targets:
-		if enemy.index == chosen_idx and enemy.alive:
+		var target_enemy: EnemyState = enemy as EnemyState
+		if target_enemy.index == chosen_idx and target_enemy.alive:
 			_clear_attack_targeting()
 			_update_ui()
 			_sync_online_snapshot()
-			return enemy
+			return target_enemy
 
 	_clear_attack_targeting()
 	_update_ui()
 	_sync_online_snapshot()
 	return null
 
-func _nearest_living_player(from_pos: Vector2i):
-	var best = null
+func _nearest_living_player(from_pos: Vector2i) -> PlayerState:
+	var best: PlayerState = null
 	var best_dist: int = 999
-	# Enemy targeting is deterministic for multiplayer:
-	# nearest living hero by Manhattan distance, then lower seat index on ties.
-	for player in bs.players:
+	for player_entry in bs.players:
+		var player: PlayerState = player_entry as PlayerState
 		if not player.alive:
 			continue
 		var dist: int = Pathfinder.manhattan(from_pos, player.pos)
@@ -1248,20 +1709,104 @@ func _nearest_living_player(from_pos: Vector2i):
 			best = player
 	return best
 
-func _best_step_toward(from_pos: Vector2i, toward: Vector2i, blocked: Array) -> Vector2i:
-	var best: Vector2i = Vector2i(-1, -1)
-	var best_dist: int = Pathfinder.manhattan(from_pos, toward)
-	for delta in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		var candidate: Vector2i = from_pos + delta
-		if candidate.x < 0 or candidate.x >= 5 or candidate.y < 0 or candidate.y >= 5:
+# ─── Condition Helpers ────────────────────────────────────────────────────────
+
+func _apply_condition_to_player(player: PlayerState, condition: String) -> void:
+	if player == null or not player.alive:
+		return
+	match condition:
+		"poison": player.poison = true
+		"stun": player.stun = true
+		"entangle": player.entangle = true
+		"hidden": player.hidden = true
+		"confused": player.confused = true
+		"slow": pass
+	bs.log_msg("  %s gains %s." % [player.name, condition.capitalize()])
+
+func _apply_condition_to_enemy(enemy: EnemyState, condition: String) -> void:
+	if enemy == null or not enemy.alive:
+		return
+	match condition:
+		"poison": enemy.poison = true
+		"stun": enemy.stun = true
+		"entangle": enemy.entangle = true
+		"hidden": enemy.hidden = true
+		"confused": enemy.confused = true
+		"slow": enemy.slow = true
+	bs.log_msg("  Enemy %d gains %s." % [enemy.index + 1, condition.capitalize()])
+
+# ─── XP and Level-Up ─────────────────────────────────────────────────────────
+
+func _award_xp_for_kill(enemy: EnemyState) -> void:
+	var xp: int = enemy.xp_reward
+	for player_entry in bs.players:
+		var player: PlayerState = player_entry as PlayerState
+		if not player.alive:
 			continue
-		if blocked.has(candidate):
+		player.xp += xp
+		bs.log_msg("  %s earns %d XP (total: %d, next level: %d)." % [
+			player.name, xp, player.xp, player.xp_for_next_level()])
+		if player.can_level_up() and not _level_up_queue.has(player.seat_index):
+			_level_up_queue.append(player.seat_index)
+			bs.log_msg("  %s is ready to level up!" % player.name)
+
+func _process_level_up_queue() -> void:
+	while not _level_up_queue.is_empty():
+		var seat_idx: int = _level_up_queue.pop_front()
+		var player: PlayerState = bs.get_player(seat_idx)
+		if player == null or not player.can_level_up():
 			continue
-		var dist: int = Pathfinder.manhattan(candidate, toward)
-		if dist < best_dist:
-			best = candidate
-			best_dist = dist
-	return best
+		await _show_level_up_overlay(player)
+
+func _show_level_up_overlay(player: PlayerState) -> void:
+	var new_level: int = player.level + 1
+	var class_cards := CardData.get_class_cards_for_level(player.hero_type, new_level)
+	if class_cards.is_empty():
+		player.level += 1
+		bs.log_msg("%s reached Level %d (no class cards available)." % [player.name, player.level])
+		return
+
+	var scene := load("res://LevelUpOverlay.tscn") as PackedScene
+	if scene == null:
+		push_error("LevelUpOverlay.tscn not found")
+		player.level += 1
+		return
+
+	var overlay: Control = scene.instantiate()
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(overlay)
+	overlay.setup(player, new_level)
+
+	var result_option := -1
+	var result_cards: Array = []
+	overlay.level_up_confirmed.connect(func(option: int, chosen_names: Array) -> void:
+		result_option = option
+		result_cards = chosen_names
+	)
+
+	await overlay.level_up_confirmed
+	overlay.queue_free()
+	await get_tree().process_frame
+
+	player.level += 1
+	if result_option == 0:
+		player.max_hp += 1
+		bs.log_msg("%s leveled up to %d! +1 Max HP (now %d)." % [player.name, player.level, player.max_hp])
+	elif result_option == 1:
+		player.max_stamina += 1
+		bs.log_msg("%s leveled up to %d! +1 Max Stamina (now %d)." % [player.name, player.level, player.max_stamina])
+	else:
+		bs.log_msg("%s leveled up to %d! (3 class cards)." % [player.name, player.level])
+
+	for card_name in result_cards:
+		var card := CardData.from_name(String(card_name))
+		if card != null:
+			player.discard_pile.append(card)
+			bs.log_msg("  %s added to %s's deck." % [card.card_name, player.name])
+
+	_update_ui()
+
+# ─── Board Input Handlers ─────────────────────────────────────────────────────
 
 func _on_tile_pressed(pos: Vector2i) -> void:
 	if _pending_move_player_index >= 0 and highlighted_tiles.has(pos):
@@ -1381,6 +1926,8 @@ func _stop_enemy_panel_target_pulse(enemy_idx: int) -> void:
 	if enemy_idx >= 0 and enemy_idx < _enemy_panels.size() and _enemy_panels[enemy_idx] != null:
 		_enemy_panels[enemy_idx].scale = Vector2.ONE
 
+# ─── Card Panel UI ────────────────────────────────────────────────────────────
+
 func _make_card_panel() -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = CARD_PANEL_SIZE
@@ -1435,8 +1982,10 @@ func _refresh_card_panel(panel: PanelContainer, card: CardData, selected: bool, 
 		fx_lbl.text = ""
 		return
 	name_lbl.text = card.card_name
-	meta_lbl.text = "C:%d  I:%d" % [card.cost, card.initiative]
+	meta_lbl.text = "S:%d  I:%d" % [card.cost, card.initiative]
 	fx_lbl.text = card.effect_text
+
+# ─── Style Helpers ────────────────────────────────────────────────────────────
 
 func _flat_style(color: Color, radius: int = 4, margin: int = 6) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -1468,6 +2017,8 @@ func _expand_spacer() -> Control:
 	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	return control
+
+# ─── Online Sync ──────────────────────────────────────────────────────────────
 
 func _sync_online_snapshot() -> void:
 	if not online_enabled or not online_is_host or online_session == null:
@@ -1504,7 +2055,12 @@ func _on_online_room_state_updated(room_state: Dictionary) -> void:
 		var owned_player = bs.get_player(owned_seat_index)
 		if owned_player != null and owned_player.alive and not owned_player.ready:
 			bs.selected_planning_player_index = owned_seat_index
-	ui_locked = bs.current_phase != BattleState.Phase.SELECT and _pending_move_player_index < 0 and _pending_attack_player_index < 0
+	ui_locked = (
+		bs.current_phase != BattleState.Phase.SELECT
+		and bs.current_phase != BattleState.Phase.REFRESH
+		and _pending_move_player_index < 0
+		and _pending_attack_player_index < 0
+	)
 	_update_ui()
 
 func _on_online_command_received(command: Dictionary) -> void:
@@ -1521,6 +2077,14 @@ func _on_online_command_received(command: Dictionary) -> void:
 			bs.deselect_card(seat, int(payload.get("selected_index", -1)))
 		"move_selected_card":
 			bs.move_selected_card(seat, int(payload.get("selected_index", -1)), int(payload.get("direction", 0)))
+		"rotate_card":
+			var player = bs.get_player(seat)
+			if player != null:
+				_select_rotated_card(player, int(payload.get("hand_index", -1)), String(payload.get("rotation_kind", "move")))
+		"rotate_as_move":
+			var player = bs.get_player(seat)
+			if player != null:
+				_select_rotated_card(player, int(payload.get("hand_index", -1)), "move")
 		"set_ready":
 			bs.set_player_ready(seat, bool(payload.get("ready", false)))
 			if bs.all_living_players_ready():

@@ -1,18 +1,23 @@
 class_name PlayerState
 extends RefCounted
 
-const MAX_HP := 12
+const BASE_MAX_HP := 12
+const BASE_MAX_STAMINA := 3
 const MAX_SELECTED := 3
-const STAMINA_CAP := 3
+const STUNNED_MAX_SELECTED := 1
 const HAND_SIZE := 5
+
+const XP_THRESHOLDS := [0, 2, 5, 9, 14]
 
 var seat_index: int = 0
 var name: String = ""
 var hero_type: String = "Cleric"
-var hp: int = MAX_HP
-var max_hp: int = MAX_HP
+var level: int = 1
+var xp: int = 0
+var hp: int = BASE_MAX_HP
+var max_hp: int = BASE_MAX_HP
+var max_stamina: int = BASE_MAX_STAMINA
 var block: int = 0
-var bless: bool = false
 var pos: Vector2i = Vector2i.ZERO
 var draw_pile: Array = []
 var hand: Array = []
@@ -21,16 +26,27 @@ var discard_pile: Array = []
 var ready: bool = false
 var alive: bool = true
 
+var bless: bool = false
+var poison: bool = false
+var stun: bool = false
+var entangle: bool = false
+var hidden: bool = false
+var confused: bool = false
+
 func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i) -> void:
 	seat_index = p_seat_index
 	name = "Player %d" % (seat_index + 1)
 	hero_type = "Cleric"
-	hp = MAX_HP
-	max_hp = MAX_HP
+	level = 1
+	xp = 0
+	hp = max_hp
+	max_hp = BASE_MAX_HP
+	max_stamina = BASE_MAX_STAMINA
 	block = 0
+	_clear_conditions()
 	bless = false
 	pos = spawn_pos
-	draw_pile = CardData.create_hero_deck()
+	draw_pile = CardData.create_hero_deck(hero_type)
 	draw_pile.shuffle()
 	hand.clear()
 	selected.clear()
@@ -62,11 +78,14 @@ func initiative() -> int:
 func can_select(card: CardData) -> bool:
 	if not alive or ready:
 		return false
-	if selected.size() >= MAX_SELECTED:
+	if selected.size() >= selection_limit():
 		return false
-	if selected_stamina() + card.cost > STAMINA_CAP:
+	if selected_stamina() + card.cost > max_stamina:
 		return false
 	return true
+
+func selection_limit() -> int:
+	return STUNNED_MAX_SELECTED if stun else MAX_SELECTED
 
 func select_card_by_hand_index(hand_index: int) -> bool:
 	if hand_index < 0 or hand_index >= hand.size():
@@ -85,7 +104,12 @@ func deselect_selected_index(selected_index: int) -> bool:
 		return false
 	var card: CardData = selected[selected_index] as CardData
 	selected.remove_at(selected_index)
-	hand.append(card)
+	if CardData.is_rotate_card(card):
+		var original := CardData.from_name(card.rotated_from_name)
+		if original != null:
+			hand.append(original)
+	else:
+		hand.append(card)
 	return true
 
 func reorder_selected(selected_index: int, direction: int) -> bool:
@@ -104,23 +128,91 @@ func reorder_selected(selected_index: int, direction: int) -> bool:
 func end_round_cleanup() -> void:
 	block = 0
 	for card in selected:
-		discard_pile.append(card)
+		var c: CardData = card as CardData
+		if CardData.is_rotate_card(c):
+			var original := CardData.from_name(c.rotated_from_name)
+			if original != null:
+				discard_pile.append(original)
+		else:
+			discard_pile.append(card)
 	selected.clear()
 	ready = false
+	entangle = false
+	confused = false
+	hidden = false
 	draw_to_hand()
 
-func apply_damage(amount: int) -> int:
-	var absorbed := mini(block, amount)
-	block -= absorbed
-	var actual := amount - absorbed
-	hp = maxi(hp - actual, 0)
+func has_any_condition() -> bool:
+	return poison or stun or entangle or hidden or confused
+
+func _clear_conditions() -> void:
+	poison = false
+	stun = false
+	entangle = false
+	hidden = false
+	confused = false
+
+func apply_damage(amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
+	var remaining := amount
+	if not ignore_block:
+		var absorbed := mini(block, remaining)
+		block -= absorbed
+		remaining -= absorbed
+	hp = maxi(hp - remaining, 0)
 	alive = hp > 0
-	return actual
+	return remaining
+
+func apply_poison_damage() -> int:
+	hp = maxi(hp - 1, 0)
+	alive = hp > 0
+	return 1
+
+func apply_heal(amount: int) -> String:
+	if has_any_condition():
+		var cond_list := condition_list()
+		_clear_conditions()
+		return "conditions cleared (%s), no HP healed" % cond_list
+	var old_hp := hp
+	hp = mini(hp + amount, max_hp)
+	alive = hp > 0
+	return "HP %d→%d" % [old_hp, hp]
+
+func xp_for_next_level() -> int:
+	if level >= XP_THRESHOLDS.size():
+		return 9999
+	return XP_THRESHOLDS[level]
+
+func can_level_up() -> bool:
+	return level < XP_THRESHOLDS.size() and xp >= xp_for_next_level()
+
+func condition_list() -> String:
+	var parts: Array[String] = []
+	if poison:
+		parts.append("Poison")
+	if stun:
+		parts.append("Stun")
+	if entangle:
+		parts.append("Entangle")
+	if hidden:
+		parts.append("Hidden")
+	if confused:
+		parts.append("Confused")
+	return ", ".join(parts)
 
 func status_text() -> String:
 	var parts: Array[String] = []
 	if bless:
 		parts.append("Bless")
+	if poison:
+		parts.append("Poison")
+	if stun:
+		parts.append("Stun")
+	if entangle:
+		parts.append("Entangle")
+	if hidden:
+		parts.append("Hidden")
+	if confused:
+		parts.append("Confused")
 	if not alive:
 		parts.append("Dead")
 	return "" if parts.is_empty() else "[" + ", ".join(parts) + "]"
@@ -130,10 +222,12 @@ func to_dict() -> Dictionary:
 		"seat_index": seat_index,
 		"name": name,
 		"hero_type": hero_type,
+		"level": level,
+		"xp": xp,
 		"hp": hp,
 		"max_hp": max_hp,
+		"max_stamina": max_stamina,
 		"block": block,
-		"bless": bless,
 		"pos": [pos.x, pos.y],
 		"draw_pile": _cards_to_names(draw_pile),
 		"hand": _cards_to_names(hand),
@@ -141,16 +235,24 @@ func to_dict() -> Dictionary:
 		"discard_pile": _cards_to_names(discard_pile),
 		"ready": ready,
 		"alive": alive,
+		"bless": bless,
+		"poison": poison,
+		"stun": stun,
+		"entangle": entangle,
+		"hidden": hidden,
+		"confused": confused,
 	}
 
 func load_from_dict(data: Dictionary) -> void:
 	seat_index = int(data.get("seat_index", seat_index))
 	name = String(data.get("name", name))
 	hero_type = String(data.get("hero_type", hero_type))
+	level = int(data.get("level", level))
+	xp = int(data.get("xp", xp))
 	hp = int(data.get("hp", hp))
 	max_hp = int(data.get("max_hp", max_hp))
+	max_stamina = int(data.get("max_stamina", max_stamina))
 	block = int(data.get("block", block))
-	bless = bool(data.get("bless", bless))
 	var pos_arr: Array = data.get("pos", [pos.x, pos.y])
 	pos = Vector2i(int(pos_arr[0]), int(pos_arr[1]))
 	draw_pile = _names_to_cards(data.get("draw_pile", []))
@@ -159,12 +261,18 @@ func load_from_dict(data: Dictionary) -> void:
 	discard_pile = _names_to_cards(data.get("discard_pile", []))
 	ready = bool(data.get("ready", ready))
 	alive = bool(data.get("alive", alive))
+	bless = bool(data.get("bless", bless))
+	poison = bool(data.get("poison", poison))
+	stun = bool(data.get("stun", stun))
+	entangle = bool(data.get("entangle", entangle))
+	hidden = bool(data.get("hidden", hidden))
+	confused = bool(data.get("confused", confused))
 
 func _cards_to_names(cards: Array) -> Array:
 	var names: Array = []
 	for card in cards:
 		var typed_card: CardData = card as CardData
-		names.append(typed_card.card_name)
+		names.append(CardData.encoded_name(typed_card))
 	return names
 
 func _names_to_cards(names: Array) -> Array:
