@@ -22,6 +22,8 @@ const BLOCK_BASE_COLOR := Color(0.52, 0.72, 0.98)
 const BLOCK_PULSE_COLOR := Color(0.78, 0.90, 1.00)
 const STATUS_BASE_COLOR := Color(0.95, 0.82, 0.34)
 const STATUS_PULSE_COLOR := Color(1.00, 0.94, 0.62)
+const ENEMY_HP_BASE_COLOR := Color(0.92, 0.40, 0.40)
+const ENEMY_STATUS_BASE_COLOR := Color(0.88, 0.82, 0.48)
 const ENEMY_PANEL_BASE_COLOR := Color(0.18, 0.09, 0.09)
 const ENEMY_PANEL_TARGETABLE_COLOR := Color(0.40, 0.26, 0.08)
 const ENEMY_PANEL_ACTIVE_COLOR := Color(0.70, 0.56, 0.12)
@@ -58,6 +60,12 @@ var _enemy_block_lbls: Array = []
 var _enemy_status_lbls: Array = []
 var _enemy_behavior_lbls: Array = []
 var _enemy_deck_lbls: Array = []
+var _enemy_hp_tweens: Array = []
+var _enemy_block_tweens: Array = []
+var _enemy_status_tweens: Array = []
+var _enemy_prev_hp: Array = []
+var _enemy_prev_block: Array = []
+var _enemy_prev_status: Array = []
 var end_overlay: Control = null
 var log_lbl: Label
 var _screen_flash: ColorRect = null
@@ -404,6 +412,12 @@ func _build_enemy_panel(parent: Control) -> void:
 	_enemy_status_lbls.clear()
 	_enemy_behavior_lbls.clear()
 	_enemy_deck_lbls.clear()
+	_enemy_hp_tweens.clear()
+	_enemy_block_tweens.clear()
+	_enemy_status_tweens.clear()
+	_enemy_prev_hp.clear()
+	_enemy_prev_block.clear()
+	_enemy_prev_status.clear()
 
 	for i in range(BattleState.MAX_ENEMIES):
 		var panel := PanelContainer.new()
@@ -421,7 +435,7 @@ func _build_enemy_panel(parent: Control) -> void:
 
 		panel_vbox.add_child(_lbl("Enemy %d" % (i + 1), true))
 		var hp_lbl := _lbl("HP: 10/10")
-		hp_lbl.add_theme_color_override("font_color", Color(0.92, 0.40, 0.40))
+		hp_lbl.add_theme_color_override("font_color", ENEMY_HP_BASE_COLOR)
 		panel_vbox.add_child(hp_lbl)
 		_enemy_hp_lbls.append(hp_lbl)
 
@@ -431,7 +445,7 @@ func _build_enemy_panel(parent: Control) -> void:
 		_enemy_block_lbls.append(block_lbl)
 
 		var status_lbl := _lbl("")
-		status_lbl.add_theme_color_override("font_color", Color(0.88, 0.82, 0.48))
+		status_lbl.add_theme_color_override("font_color", ENEMY_STATUS_BASE_COLOR)
 		panel_vbox.add_child(status_lbl)
 		_enemy_status_lbls.append(status_lbl)
 
@@ -445,6 +459,12 @@ func _build_enemy_panel(parent: Control) -> void:
 		deck_lbl.add_theme_color_override("font_color", Color(0.64, 0.66, 0.74))
 		panel_vbox.add_child(deck_lbl)
 		_enemy_deck_lbls.append(deck_lbl)
+		_enemy_hp_tweens.append(null)
+		_enemy_block_tweens.append(null)
+		_enemy_status_tweens.append(null)
+		_enemy_prev_hp.append(null)
+		_enemy_prev_block.append(null)
+		_enemy_prev_status.append(null)
 
 func _build_log(parent: Control) -> void:
 	log_lbl = Label.new()
@@ -467,9 +487,6 @@ func _start_battle() -> void:
 	_pending_move_player_index = -1
 	_clear_attack_targeting()
 	bs.start_next_round()
-	for enemy in bs.enemies:
-		if enemy.alive and enemy.revealed != null:
-			bs.log_msg("Enemy %d reveals %s (Init %d)." % [enemy.index + 1, enemy.revealed.behavior_name, enemy.revealed.initiative])
 	_update_ui()
 	_sync_online_snapshot()
 
@@ -479,9 +496,6 @@ func _begin_next_round() -> void:
 	_pending_move_player_index = -1
 	_clear_attack_targeting()
 	bs.start_next_round()
-	for enemy in bs.enemies:
-		if enemy.alive and enemy.revealed != null:
-			bs.log_msg("Enemy %d reveals %s (Init %d)." % [enemy.index + 1, enemy.revealed.behavior_name, enemy.revealed.initiative])
 	_update_ui()
 	_sync_online_snapshot()
 
@@ -499,11 +513,23 @@ func _update_ui() -> void:
 	for enemy_idx in range(_enemy_panels.size()):
 		if enemy_idx < bs.enemies.size():
 			var enemy = bs.enemies[enemy_idx]
+			var prev_enemy_hp = _enemy_prev_hp[enemy_idx]
+			var prev_enemy_block = _enemy_prev_block[enemy_idx]
+			var prev_enemy_status = _enemy_prev_status[enemy_idx]
 			_enemy_panels[enemy_idx].visible = true
 			_refresh_enemy_panel_visual(enemy_idx)
 			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d" % [enemy.hp, enemy.max_hp]
 			_enemy_block_lbls[enemy_idx].text = "Block: %d" % enemy.block
 			_enemy_status_lbls[enemy_idx].text = enemy.status_text()
+			_enemy_prev_hp[enemy_idx] = enemy.hp
+			_enemy_prev_block[enemy_idx] = enemy.block
+			_enemy_prev_status[enemy_idx] = _enemy_status_lbls[enemy_idx].text
+			if prev_enemy_hp != null and int(prev_enemy_hp) != enemy.hp:
+				_pulse_enemy_stat_label(enemy_idx, _enemy_hp_lbls, _enemy_hp_tweens, ENEMY_HP_BASE_COLOR, HP_GAIN_COLOR if enemy.hp > int(prev_enemy_hp) else HP_LOSS_COLOR)
+			if prev_enemy_block != null and int(prev_enemy_block) != enemy.block:
+				_pulse_enemy_stat_label(enemy_idx, _enemy_block_lbls, _enemy_block_tweens, BLOCK_BASE_COLOR, BLOCK_PULSE_COLOR)
+			if prev_enemy_status != null and String(prev_enemy_status) != _enemy_status_lbls[enemy_idx].text:
+				_pulse_enemy_stat_label(enemy_idx, _enemy_status_lbls, _enemy_status_tweens, ENEMY_STATUS_BASE_COLOR, STATUS_PULSE_COLOR)
 			if enemy.revealed != null:
 				_enemy_behavior_lbls[enemy_idx].text = "Intent: %s\nInit %d\n%s" % [
 					enemy.revealed.behavior_name,
@@ -516,6 +542,9 @@ func _update_ui() -> void:
 		else:
 			_enemy_panels[enemy_idx].visible = false
 			_stop_enemy_panel_target_pulse(enemy_idx)
+			_enemy_prev_hp[enemy_idx] = null
+			_enemy_prev_block[enemy_idx] = null
+			_enemy_prev_status[enemy_idx] = null
 
 	for seat_index in range(_player_cards.size()):
 		var ui := _player_cards[seat_index] as Dictionary
@@ -843,27 +872,45 @@ func _pulse_player_stat_label(ui: Dictionary, label_key: String, tween_key: Stri
 	if target_lbl == null:
 		return
 	var existing: Tween = ui.get(tween_key)
+	var tw := _pulse_stat_label(target_lbl, existing, base_color, accent)
+	ui[tween_key] = tw
+
+func _pulse_enemy_stat_label(enemy_idx: int, labels: Array, tweens: Array, base_color: Color, accent: Color) -> void:
+	if enemy_idx < 0 or enemy_idx >= labels.size() or enemy_idx >= tweens.size():
+		return
+	var target_lbl: Label = labels[enemy_idx]
+	if target_lbl == null:
+		return
+	tweens[enemy_idx] = _pulse_stat_label(target_lbl, tweens[enemy_idx], base_color, accent)
+
+func _pulse_stat_label(target_lbl: Label, existing: Tween, base_color: Color, accent: Color) -> Tween:
 	if existing != null:
 		existing.kill()
 	target_lbl.add_theme_color_override("font_color", base_color)
 	target_lbl.scale = Vector2.ONE
 	target_lbl.modulate = Color.WHITE
 	target_lbl.pivot_offset = target_lbl.size * 0.5
+	target_lbl.z_index = 20
 
 	var tw := create_tween()
-	ui[tween_key] = tw
-	tw.set_parallel(true)
 	tw.set_ease(Tween.EASE_OUT)
 	tw.set_trans(Tween.TRANS_BACK)
-	tw.tween_property(target_lbl, "scale", Vector2(1.28, 1.28), 0.14)
-	tw.tween_property(target_lbl, "modulate", accent, 0.10)
+	tw.tween_property(target_lbl, "scale", Vector2(1.55, 1.55), 0.10)
+	tw.parallel().tween_property(target_lbl, "modulate", accent, 0.08)
 
-	var settle := tw.chain()
-	settle.set_parallel(true)
-	settle.set_ease(Tween.EASE_IN_OUT)
-	settle.set_trans(Tween.TRANS_CUBIC)
-	settle.tween_property(target_lbl, "scale", Vector2.ONE, 0.18)
-	settle.tween_property(target_lbl, "modulate", Color.WHITE, 0.16)
+	tw.tween_property(target_lbl, "scale", Vector2(0.92, 0.92), 0.09)
+	tw.parallel().tween_property(target_lbl, "modulate", Color.WHITE, 0.09)
+
+	tw.tween_property(target_lbl, "scale", Vector2(1.22, 1.22), 0.08)
+	tw.parallel().tween_property(target_lbl, "modulate", accent, 0.06)
+
+	tw.tween_property(target_lbl, "scale", Vector2.ONE, 0.14)
+	tw.parallel().tween_property(target_lbl, "modulate", Color.WHITE, 0.12)
+	tw.tween_callback(func() -> void:
+		target_lbl.z_index = 0
+		target_lbl.add_theme_color_override("font_color", base_color)
+	)
+	return tw
 
 func _on_move_selected_pressed(seat_index: int, selected_index: int, direction: int) -> void:
 	var player = bs.get_player(seat_index)
@@ -884,8 +931,18 @@ func _run_round() -> void:
 	if ui_locked:
 		return
 	ui_locked = true
+	bs.current_phase = BattleState.Phase.REVEAL
+	bs.reveal_enemy_behaviors()
+	for enemy in bs.enemies:
+		if enemy.alive and enemy.revealed != null:
+			bs.log_msg("Enemy %d reveals %s (Init %d)." % [enemy.index + 1, enemy.revealed.behavior_name, enemy.revealed.initiative])
+	_update_ui()
+	_sync_online_snapshot()
+
+	await get_tree().create_timer(0.35).timeout
 	bs.current_phase = BattleState.Phase.RESOLVE
 	_update_ui()
+	_sync_online_snapshot()
 
 	var actors = bs.build_actor_order(true)
 	await _show_turn_order(actors)

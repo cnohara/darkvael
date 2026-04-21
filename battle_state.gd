@@ -94,9 +94,7 @@ func _pick_enemy_spawn(occupied: Array, desired_min: int) -> Vector2i:
 
 func start_next_round() -> void:
 	round_number += 1
-	current_phase = Phase.REVEAL
 	log_msg("=== Round %d ===" % round_number)
-	reveal_enemy_behaviors()
 	current_phase = Phase.SELECT
 	selected_planning_player_index = first_editable_player_index()
 
