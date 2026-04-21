@@ -2,6 +2,7 @@ class_name Board3D
 extends Node3D
 
 signal tile_pressed(pos: Vector2i)
+signal enemy_pressed(enemy_idx: int)
 
 const TILE_SIZE := 1.0
 const TILE_GAP  := 0.07
@@ -14,6 +15,14 @@ var _tile_mats: Array = []
 var _hero_mi:   MeshInstance3D
 var _enemy_mis: Array = []   # up to 3 MeshInstance3D
 var _cam:       Camera3D
+var _enemy_base_colors := [
+	Color(0.80, 0.18, 0.18),
+	Color(0.82, 0.38, 0.10),
+	Color(0.65, 0.10, 0.38),
+]
+var _targetable_enemy_indices: Array = []
+var _active_target_enemy_idx := -1
+var _enemy_target_tweens: Dictionary = {}
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
@@ -27,6 +36,12 @@ func setup() -> void:
 
 func adjust_zoom(factor: float) -> void:
 	_cam.size = clampf(_cam.size / factor, ZOOM_MIN, ZOOM_MAX)
+
+func get_zoom_size() -> float:
+	return _cam.size
+
+func set_zoom_size(size: float) -> void:
+	_cam.size = clampf(size, ZOOM_MIN, ZOOM_MAX)
 
 # enemy_positions: Array[Vector2i], one per enemy slot; Vector2i(-1,-1) = hidden
 func update_board(hero_pos: Vector2i, enemy_positions: Array, highlighted: Array) -> void:
@@ -58,6 +73,37 @@ func flash_tile(pos: Vector2i, color: Color) -> void:
 	mat.emission_enabled = true
 	mat.emission = color
 	mat.emission_energy_multiplier = 1.0
+
+func set_enemy_target_state(selectable_indices: Array, active_enemy_idx: int = -1) -> void:
+	_targetable_enemy_indices = selectable_indices.duplicate()
+	_active_target_enemy_idx = active_enemy_idx
+	for i in range(_enemy_mis.size()):
+		var mi: MeshInstance3D = _enemy_mis[i]
+		var mat := mi.material_override as StandardMaterial3D
+		if mat == null:
+			continue
+		var base_color: Color = _enemy_base_colors[i]
+		mat.albedo_color = base_color
+		mat.emission_enabled = false
+		mat.emission_energy_multiplier = 0.0
+		if _enemy_target_tweens.has(i):
+			var running: Tween = _enemy_target_tweens[i]
+			if running != null:
+				running.kill()
+			_enemy_target_tweens.erase(i)
+		mi.scale = Vector3.ONE
+		if i == _active_target_enemy_idx:
+			mat.emission_enabled = true
+			mat.emission = Color(1.0, 0.92, 0.30)
+			mat.emission_energy_multiplier = 2.4
+			_start_enemy_target_pulse(i)
+		elif _targetable_enemy_indices.has(i):
+			mat.emission_enabled = true
+			mat.emission = Color(0.95, 0.72, 0.18)
+			mat.emission_energy_multiplier = 1.2
+
+func clear_enemy_target_state() -> void:
+	set_enemy_target_state([], -1)
 
 # ── Animations ───────────────────────────────────────────────────────────────
 
@@ -238,21 +284,26 @@ func _build_units() -> void:
 	add_child(_hero_mi)
 
 	_enemy_mis.clear()
-	var enemy_colors := [
-		Color(0.80, 0.18, 0.18),
-		Color(0.82, 0.38, 0.10),
-		Color(0.65, 0.10, 0.38),
-	]
 	for i in range(3):
-		var mi := _unit_mesh(enemy_colors[i])
+		var mi := _unit_mesh(_enemy_base_colors[i])
+		var area := Area3D.new()
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(0.9, UNIT_H + 0.35, 0.9)
+		shape.shape = box
+		shape.position = Vector3(0.0, 0.0, 0.0)
+		area.input_event.connect(_on_enemy_event.bind(i))
+		mi.add_child(area)
+		area.add_child(shape)
 		var lbl := Label3D.new()
 		lbl.text = str(i + 1)
 		lbl.pixel_size = 0.011
 		lbl.font_size = 64
 		lbl.outline_size = 8
 		lbl.modulate = Color(1.0, 1.0, 0.15)
-		lbl.position = Vector3(0.0, UNIT_H * 0.6, 0.0)
+		lbl.position = Vector3(0.0, UNIT_H * 0.95, 0.0)
 		lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		lbl.no_depth_test = true
 		mi.add_child(lbl)
 		mi.visible = false
 		add_child(mi)
@@ -284,3 +335,19 @@ func _on_tile_event(_cam_node: Camera3D, ev: InputEvent,
 	if ev is InputEventMouseButton:
 		if ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 			tile_pressed.emit(gpos)
+
+func _on_enemy_event(_cam_node: Camera3D, ev: InputEvent,
+		_ep: Vector3, _n: Vector3, _si: int, enemy_idx: int) -> void:
+	if ev is InputEventMouseButton:
+		if ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			enemy_pressed.emit(enemy_idx)
+
+func _start_enemy_target_pulse(enemy_idx: int) -> void:
+	var mi: MeshInstance3D = _enemy_mis[enemy_idx]
+	var tw := create_tween()
+	_enemy_target_tweens[enemy_idx] = tw
+	tw.set_loops()
+	tw.set_trans(Tween.TRANS_SINE)
+	tw.set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(mi, "scale", Vector3(1.18, 1.10, 1.18), 0.34)
+	tw.tween_property(mi, "scale", Vector3.ONE, 0.34)

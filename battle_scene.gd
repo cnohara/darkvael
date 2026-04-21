@@ -6,8 +6,12 @@ signal return_to_title
 var bs: BattleState
 var ui_locked := false
 var highlighted_tiles: Array = []
+var _targetable_enemy_indices: Array = []
+var _active_target_enemy_idx := -1
+var _enemy_panel_target_tweens: Dictionary = {}
 
 signal move_dest_chosen(pos: Vector2i)
+signal attack_target_chosen(enemy_idx: int)
 
 # ── UI refs ────────────────────────────────────────────────────────────────
 var round_lbl: Label
@@ -42,6 +46,26 @@ var _enemy_tok_init_lbl: Label = null
 var log_lbl: Label
 var end_overlay: Control = null
 var _screen_flash: ColorRect = null
+var _stamina_pulse_tween: Tween = null
+var _hero_area_pulse_tweens: Dictionary = {}
+var _last_hero_block: int = -1
+var _last_hero_status_text := ""
+var _board_zoom_size := Board3D.ZOOM_MIN
+
+const STAMINA_BASE_FONT_SIZE := 14
+const STAMINA_PULSE_FONT_SIZE := 22
+const STAMINA_BASE_COLOR := Color(0.9, 0.75, 0.3)
+const STAMINA_SPEND_COLOR := Color(1.0, 0.95, 0.45)
+const STAMINA_REFUND_COLOR := Color(0.72, 0.95, 0.55)
+const HERO_AREA_BASE_SCALE := Vector2.ONE
+const HERO_AREA_PULSE_SCALE := Vector2(1.14, 1.14)
+const HERO_BLOCK_BASE_COLOR := Color(0.5, 0.7, 0.95)
+const HERO_BLOCK_PULSE_COLOR := Color(0.78, 0.88, 1.0)
+const HERO_STATUS_BASE_COLOR := Color(0.9, 0.85, 0.3)
+const HERO_STATUS_PULSE_COLOR := Color(1.0, 0.96, 0.58)
+const ENEMY_PANEL_BASE_COLOR := Color(0.18, 0.09, 0.09)
+const ENEMY_PANEL_TARGETABLE_COLOR := Color(0.40, 0.26, 0.08)
+const ENEMY_PANEL_ACTIVE_COLOR := Color(0.70, 0.56, 0.12)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LIFECYCLE
@@ -57,11 +81,14 @@ func _input(event: InputEvent) -> void:
 	if board_3d:
 		if event is InputEventMagnifyGesture:
 			board_3d.adjust_zoom(event.factor)
+			_board_zoom_size = board_3d.get_zoom_size()
 		elif event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 				board_3d.adjust_zoom(1.12)
+				_board_zoom_size = board_3d.get_zoom_size()
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 				board_3d.adjust_zoom(0.89)
+				_board_zoom_size = board_3d.get_zoom_size()
 
 	if event is InputEventKey and event.pressed:
 		if ui_locked or bs.current_phase != BattleState.Phase.SELECT:
@@ -224,10 +251,10 @@ func _build_hero_panel(parent: Control) -> void:
 	hero_hp_lbl.add_theme_color_override("font_color", Color(0.4, 0.9, 0.5))
 	vbox.add_child(hero_hp_lbl)
 	hero_block_lbl = _lbl("Block: 0")
-	hero_block_lbl.add_theme_color_override("font_color", Color(0.5, 0.7, 0.95))
+	hero_block_lbl.add_theme_color_override("font_color", HERO_BLOCK_BASE_COLOR)
 	vbox.add_child(hero_block_lbl)
 	hero_status_lbl = _lbl("")
-	hero_status_lbl.add_theme_color_override("font_color", Color(0.9, 0.85, 0.3))
+	hero_status_lbl.add_theme_color_override("font_color", HERO_STATUS_BASE_COLOR)
 	vbox.add_child(hero_status_lbl)
 	vbox.add_child(_expand_spacer())
 	vbox.add_child(_lbl("──────────────"))
@@ -253,7 +280,9 @@ func _build_board(parent: Control) -> void:
 	board_3d = Board3D.new()
 	sv.add_child(board_3d)
 	board_3d.setup()
+	board_3d.set_zoom_size(_board_zoom_size)
 	board_3d.tile_pressed.connect(_on_tile_pressed)
+	board_3d.enemy_pressed.connect(_on_board_enemy_pressed)
 
 func _build_enemy_panels(parent: Control) -> void:
 	var outer := PanelContainer.new()
@@ -282,7 +311,9 @@ func _build_enemy_panels(parent: Control) -> void:
 	for i in range(3):
 		var p := PanelContainer.new()
 		p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		p.add_theme_stylebox_override("panel", _flat_style(Color(0.18, 0.09, 0.09), 4, 5))
+		p.add_theme_stylebox_override("panel", _flat_style(ENEMY_PANEL_BASE_COLOR, 4, 5))
+		p.mouse_filter = Control.MOUSE_FILTER_STOP
+		p.gui_input.connect(_on_enemy_panel_input.bind(i))
 		p.visible = false
 		vbox.add_child(p)
 		_enemy_panels.append(p)
@@ -323,9 +354,14 @@ func _build_enemy_panels(parent: Control) -> void:
 		_enemy_deck_lbls.append(deck_lbl)
 
 func _build_selected_row(parent: Control) -> void:
+	var stamina_holder := Control.new()
+	stamina_holder.custom_minimum_size = Vector2(0, 34)
+	parent.add_child(stamina_holder)
+
 	stamina_lbl = _lbl("Stamina: 3/3")
-	stamina_lbl.add_theme_color_override("font_color", Color(0.9, 0.75, 0.3))
-	parent.add_child(stamina_lbl)
+	stamina_lbl.add_theme_font_size_override("font_size", STAMINA_BASE_FONT_SIZE)
+	stamina_lbl.add_theme_color_override("font_color", STAMINA_BASE_COLOR)
+	stamina_holder.add_child(stamina_lbl)
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 6)
@@ -388,13 +424,24 @@ func _update_ui() -> void:
 
 	hero_hp_lbl.text = "HP: %d/%d" % [bs.hero_hp, bs.hero_max_hp]
 	hero_block_lbl.text = "Block: %d" % bs.hero_block
-	hero_status_lbl.text = "[Bless]" if bs.hero_bless else ""
+	var hero_status_text := "[Bless]" if bs.hero_bless else ""
+	hero_status_lbl.text = hero_status_text
 	hero_deck_lbl.text = "Draw: %d\nDiscard: %d" % [bs.hero_draw.size(), bs.hero_discard.size()]
+
+	if _last_hero_block >= 0 and bs.hero_block > _last_hero_block:
+		_pulse_hero_area_label(hero_block_lbl, HERO_BLOCK_BASE_COLOR, HERO_BLOCK_PULSE_COLOR)
+	if _last_hero_status_text != "" and hero_status_text != _last_hero_status_text and hero_status_text != "":
+		_pulse_hero_area_label(hero_status_lbl, HERO_STATUS_BASE_COLOR, HERO_STATUS_PULSE_COLOR)
+	elif _last_hero_status_text == "" and hero_status_text != "" and _last_hero_block >= 0:
+		_pulse_hero_area_label(hero_status_lbl, HERO_STATUS_BASE_COLOR, HERO_STATUS_PULSE_COLOR)
+	_last_hero_block = bs.hero_block
+	_last_hero_status_text = hero_status_text
 
 	for i in range(3):
 		if i < bs.enemies.size():
 			_enemy_panels[i].visible = true
 			var e: EnemyState = bs.enemies[i]
+			_refresh_enemy_panel_visual(i)
 			_enemy_hp_lbls[i].text = "HP: %d/%d" % [e.hp, e.max_hp]
 			_enemy_block_lbls[i].text = "Block: %d" % e.block
 			_enemy_status_lbls[i].text = "[Slow]" if e.slow else ("[Dead]" if e.hp <= 0 else "")
@@ -405,6 +452,7 @@ func _update_ui() -> void:
 				_enemy_behavior_lbls[i].text = "Intent: ?"
 		else:
 			_enemy_panels[i].visible = false
+			_stop_enemy_panel_target_pulse(i)
 
 	_update_board()
 
@@ -431,6 +479,7 @@ func _update_board() -> void:
 		for e in bs.enemies:
 			positions.append(e.pos if e.hp > 0 else Vector2i(-1, -1))
 		board_3d.update_board(bs.hero_pos, positions, highlighted_tiles)
+		board_3d.set_enemy_target_state(_targetable_enemy_indices, _active_target_enemy_idx)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STATE MACHINE
@@ -444,6 +493,7 @@ func _start_battle() -> void:
 	bs.current_phase = BattleState.Phase.SELECT
 	ui_locked = false
 	highlighted_tiles.clear()
+	_clear_attack_targeting()
 	_update_ui()
 
 func _on_confirm_pressed() -> void:
@@ -557,7 +607,7 @@ func _hero_effect(fx: Dictionary, card: CardData) -> void:
 			var rng: int = fx.get("range", 1)
 			var bonus := 2 if bs.hero_bless else 0
 			bs.hero_bless = false
-			var target_e: EnemyState = _nearest_enemy_in_range(rng)
+			var target_e := await _choose_attack_target(rng, card)
 			if target_e != null:
 				var raw: int = fx["value"] + bonus
 				var absorbed := mini(target_e.block, raw)
@@ -569,6 +619,7 @@ func _hero_effect(fx: Dictionary, card: CardData) -> void:
 						await board_3d.animate_ranged_attack(bs.hero_pos, target_e.pos)
 					if absorbed > 0:
 						await board_3d.animate_block(target_e.pos)
+					await board_3d.animate_hit(false, target_e.index)
 				bs.apply_damage_enemy(target_e, raw)
 				var msg := "  %d dmg" % raw
 				if bonus > 0: msg += " (+%d Bless)" % bonus
@@ -602,16 +653,47 @@ func _hero_effect(fx: Dictionary, card: CardData) -> void:
 				bs.log_msg("  Undead %d gains Slow" % (target_e.index + 1))
 			await get_tree().create_timer(0.25).timeout
 
-func _nearest_enemy_in_range(rng: int) -> EnemyState:
-	var best: EnemyState = null
-	var best_d := 999
+func _enemies_in_range(rng: int) -> Array:
+	var targets: Array = []
 	for e in bs.enemies:
 		if e.hp <= 0: continue
 		var d := Pathfinder.manhattan(bs.hero_pos, e.pos)
-		if d <= rng and d < best_d:
-			best_d = d
-			best = e
-	return best
+		if d <= rng:
+			targets.append(e)
+	targets.sort_custom(func(a: EnemyState, b: EnemyState) -> bool:
+		var da := Pathfinder.manhattan(bs.hero_pos, a.pos)
+		var db := Pathfinder.manhattan(bs.hero_pos, b.pos)
+		if da == db:
+			return a.index < b.index
+		return da < db
+	)
+	return targets
+
+func _choose_attack_target(rng: int, card: CardData) -> EnemyState:
+	var targets := _enemies_in_range(rng)
+	if targets.is_empty():
+		return null
+	if targets.size() == 1:
+		return targets[0]
+
+	_targetable_enemy_indices.clear()
+	for e in targets:
+		_targetable_enemy_indices.append((e as EnemyState).index)
+	_active_target_enemy_idx = _targetable_enemy_indices[0]
+	bs.log_msg("  %s: choose a target" % card.card_name)
+	_update_ui()
+
+	var chosen_idx: int = await attack_target_chosen
+	for e in targets:
+		var enemy := e as EnemyState
+		if enemy.index == chosen_idx and enemy.hp > 0:
+			_clear_attack_targeting()
+			_update_ui()
+			return enemy
+
+	_clear_attack_targeting()
+	_update_ui()
+	return null
 
 func _nearest_living_enemy() -> EnemyState:
 	var best: EnemyState = null
@@ -754,6 +836,15 @@ func _on_tile_pressed(pos: Vector2i) -> void:
 	if highlighted_tiles.has(pos):
 		move_dest_chosen.emit(pos)
 
+func _on_board_enemy_pressed(enemy_idx: int) -> void:
+	_try_choose_attack_target(enemy_idx)
+
+func _on_enemy_panel_input(event: InputEvent, enemy_idx: int) -> void:
+	if not (event is InputEventMouseButton and event.pressed and
+			event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	_try_choose_attack_target(enemy_idx)
+
 func _on_hand_card_input(event: InputEvent, slot: int) -> void:
 	if not (event is InputEventMouseButton and event.pressed and
 			event.button_index == MOUSE_BUTTON_LEFT):
@@ -771,6 +862,7 @@ func _try_select_hand(slot: int) -> void:
 		return
 	bs.select_card(card)
 	_update_ui()
+	_pulse_stamina(true)
 
 func _on_sel_card_input(event: InputEvent, slot: int) -> void:
 	if not (event is InputEventMouseButton and event.pressed and
@@ -781,6 +873,7 @@ func _on_sel_card_input(event: InputEvent, slot: int) -> void:
 	if slot < bs.hero_selected.size():
 		bs.deselect_card(bs.hero_selected[slot] as CardData)
 		_update_ui()
+		_pulse_stamina(false)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # END GAME
@@ -826,6 +919,135 @@ func _flash_reject(panel: PanelContainer) -> void:
 	panel.add_theme_stylebox_override("panel", _flat_style(Color(0.6, 0.1, 0.1)))
 	await get_tree().create_timer(0.22).timeout
 	_update_ui()
+
+func _pulse_stamina(spent: bool) -> void:
+	if stamina_lbl == null:
+		return
+	if _stamina_pulse_tween != null:
+		_stamina_pulse_tween.kill()
+	_set_stamina_visual(STAMINA_BASE_FONT_SIZE, STAMINA_BASE_COLOR)
+
+	var accent := STAMINA_SPEND_COLOR if spent else STAMINA_REFUND_COLOR
+	var pulse_up := func(t: float) -> void:
+		var size := int(round(lerpf(float(STAMINA_BASE_FONT_SIZE), float(STAMINA_PULSE_FONT_SIZE), t)))
+		_set_stamina_visual(size, STAMINA_BASE_COLOR.lerp(accent, t))
+	var pulse_down := func(t: float) -> void:
+		var size := int(round(lerpf(float(STAMINA_PULSE_FONT_SIZE), float(STAMINA_BASE_FONT_SIZE), t)))
+		_set_stamina_visual(size, accent.lerp(STAMINA_BASE_COLOR, t))
+
+	_stamina_pulse_tween = create_tween()
+	_stamina_pulse_tween.set_ease(Tween.EASE_OUT)
+	_stamina_pulse_tween.set_trans(Tween.TRANS_BACK)
+	_stamina_pulse_tween.tween_method(pulse_up, 0.0, 1.0, 0.13)
+
+	var settle := _stamina_pulse_tween.chain()
+	settle.set_ease(Tween.EASE_IN_OUT)
+	settle.set_trans(Tween.TRANS_CUBIC)
+	settle.tween_method(pulse_down, 0.0, 1.0, 0.20)
+
+func _set_stamina_visual(font_size: int, color: Color) -> void:
+	stamina_lbl.add_theme_font_size_override("font_size", font_size)
+	stamina_lbl.add_theme_color_override("font_color", color)
+
+func _pulse_hero_area_label(label: Label, base_color: Color, accent: Color) -> void:
+	if label == null:
+		return
+	if _hero_area_pulse_tweens.has(label):
+		var running: Tween = _hero_area_pulse_tweens[label]
+		if running != null:
+			running.kill()
+
+	_set_hero_area_label_visual(label, base_color, HERO_AREA_BASE_SCALE)
+
+	var pulse_up := func(t: float) -> void:
+		_set_hero_area_label_visual(
+			label,
+			base_color.lerp(accent, t),
+			HERO_AREA_BASE_SCALE.lerp(HERO_AREA_PULSE_SCALE, t)
+		)
+	var pulse_down := func(t: float) -> void:
+		_set_hero_area_label_visual(
+			label,
+			accent.lerp(base_color, t),
+			HERO_AREA_PULSE_SCALE.lerp(HERO_AREA_BASE_SCALE, t)
+		)
+
+	var tw := create_tween()
+	_hero_area_pulse_tweens[label] = tw
+	tw.set_ease(Tween.EASE_OUT)
+	tw.set_trans(Tween.TRANS_BACK)
+	tw.tween_method(pulse_up, 0.0, 1.0, 0.13)
+
+	var settle := tw.chain()
+	settle.set_ease(Tween.EASE_IN_OUT)
+	settle.set_trans(Tween.TRANS_CUBIC)
+	settle.tween_method(pulse_down, 0.0, 1.0, 0.20)
+	tw.finished.connect(func() -> void:
+		_set_hero_area_label_visual(label, base_color, HERO_AREA_BASE_SCALE)
+		_hero_area_pulse_tweens.erase(label)
+	)
+
+func _set_hero_area_label_visual(label: Label, color: Color, scale_value: Vector2) -> void:
+	label.add_theme_color_override("font_color", color)
+	label.pivot_offset = label.size * 0.5
+	label.scale = scale_value
+
+func _try_choose_attack_target(enemy_idx: int) -> void:
+	if not _targetable_enemy_indices.has(enemy_idx):
+		return
+	_active_target_enemy_idx = enemy_idx
+	_update_ui()
+	attack_target_chosen.emit(enemy_idx)
+
+func _clear_attack_targeting() -> void:
+	_targetable_enemy_indices.clear()
+	_active_target_enemy_idx = -1
+	for i in range(_enemy_panels.size()):
+		_stop_enemy_panel_target_pulse(i)
+	if board_3d:
+		board_3d.clear_enemy_target_state()
+
+func _refresh_enemy_panel_visual(enemy_idx: int) -> void:
+	var panel: PanelContainer = _enemy_panels[enemy_idx]
+	if panel == null:
+		return
+	var color := ENEMY_PANEL_BASE_COLOR
+	if enemy_idx == _active_target_enemy_idx:
+		color = ENEMY_PANEL_ACTIVE_COLOR
+		_start_enemy_panel_target_pulse(enemy_idx)
+	elif _targetable_enemy_indices.has(enemy_idx):
+		color = ENEMY_PANEL_TARGETABLE_COLOR
+		_stop_enemy_panel_target_pulse(enemy_idx)
+		panel.scale = Vector2.ONE
+	else:
+		_stop_enemy_panel_target_pulse(enemy_idx)
+		panel.scale = Vector2.ONE
+	panel.add_theme_stylebox_override("panel", _flat_style(color, 4, 5))
+
+func _start_enemy_panel_target_pulse(enemy_idx: int) -> void:
+	var panel: PanelContainer = _enemy_panels[enemy_idx]
+	if panel == null:
+		return
+	if _enemy_panel_target_tweens.has(enemy_idx):
+		return
+	panel.pivot_offset = panel.size * 0.5
+	var tw := create_tween()
+	_enemy_panel_target_tweens[enemy_idx] = tw
+	tw.set_loops()
+	tw.set_trans(Tween.TRANS_SINE)
+	tw.set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(panel, "scale", Vector2(1.03, 1.03), 0.34)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.34)
+
+func _stop_enemy_panel_target_pulse(enemy_idx: int) -> void:
+	if not _enemy_panel_target_tweens.has(enemy_idx):
+		return
+	var tw: Tween = _enemy_panel_target_tweens[enemy_idx]
+	if tw != null:
+		tw.kill()
+	_enemy_panel_target_tweens.erase(enemy_idx)
+	if enemy_idx < _enemy_panels.size() and _enemy_panels[enemy_idx] != null:
+		_enemy_panels[enemy_idx].scale = Vector2.ONE
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STYLE / WIDGET FACTORIES

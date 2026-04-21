@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(gd|tscn|tres|gdshader|gdscript\\)$\")",
+      "Bash(gh auth *)",
+      "Bash(grep -E \"\\\\.\\(tscn|tres|gd\\)$\")"
+    ]
+  }
+}
