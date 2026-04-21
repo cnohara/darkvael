@@ -23,3 +23,10 @@ static func create_enemy_deck() -> Array:
 		_make("Lunge", 7, "Atk 3 if adj, else move 2",
 			[{"type": "lunge", "attack_value": 3, "move_value": 2}]),
 	]
+
+static func from_name(behavior_name: String) -> BehaviorData:
+	for behavior in create_enemy_deck():
+		var typed_behavior: BehaviorData = behavior as BehaviorData
+		if typed_behavior.behavior_name == behavior_name:
+			return typed_behavior
+	return null

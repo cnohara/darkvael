@@ -39,3 +39,10 @@ static func create_hero_deck() -> Array:
 		_make("Guiding Chant", 1, 4, "Block 2, Move 1",
 			[{"type": "block", "value": 2}, {"type": "move", "value": 1}]),
 	]
+
+static func from_name(card_name: String) -> CardData:
+	for card in create_hero_deck():
+		var typed_card: CardData = card as CardData
+		if typed_card.card_name == card_name:
+			return typed_card
+	return null
