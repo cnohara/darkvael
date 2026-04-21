@@ -679,8 +679,8 @@ func _choose_attack_target(rng: int, card: CardData) -> EnemyState:
 	_targetable_enemy_indices.clear()
 	for e in targets:
 		_targetable_enemy_indices.append((e as EnemyState).index)
-	_active_target_enemy_idx = _targetable_enemy_indices[0]
-	bs.log_msg("  %s: choose a target" % card.card_name)
+	_active_target_enemy_idx = -1
+	bs.log_msg("  %s: tap an enemy to target, then tap again to attack" % card.card_name)
 	_update_ui()
 
 	var chosen_idx: int = await attack_target_chosen
@@ -994,6 +994,11 @@ func _set_hero_area_label_visual(label: Label, color: Color, scale_value: Vector
 
 func _try_choose_attack_target(enemy_idx: int) -> void:
 	if not _targetable_enemy_indices.has(enemy_idx):
+		return
+	if _active_target_enemy_idx != enemy_idx:
+		_active_target_enemy_idx = enemy_idx
+		bs.log_msg("  Undead %d targeted — tap again to attack" % (enemy_idx + 1))
+		_update_ui()
 		return
 	_active_target_enemy_idx = enemy_idx
 	_update_ui()
