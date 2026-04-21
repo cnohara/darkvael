@@ -28,6 +28,7 @@ const ENEMY_STATUS_BASE_COLOR := Color(0.88, 0.82, 0.48)
 const ENEMY_PANEL_BASE_COLOR := Color(0.18, 0.09, 0.09)
 const ENEMY_PANEL_TARGETABLE_COLOR := Color(0.40, 0.26, 0.08)
 const ENEMY_PANEL_ACTIVE_COLOR := Color(0.70, 0.56, 0.12)
+const MAP_TILE_DATA := preload("res://map_tile_data.gd")
 
 var requested_player_count := 1
 var bs: BattleState
@@ -661,6 +662,7 @@ func _update_ui() -> void:
 func _update_board() -> void:
 	if board_3d == null:
 		return
+	board_3d.set_map_tile_id(bs.active_map_tile_id)
 	var player_positions: Array = []
 	for player in bs.players:
 		player_positions.append(player.pos if player.alive else Vector2i(-1, -1))
@@ -1405,7 +1407,9 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 
 func _resolve_player_move(player: PlayerState, budget: int) -> void:
 	var end_blocked := bs.occupied_positions_for_player(player.seat_index)
-	var reachable := Pathfinder.get_reachable(player.pos, budget, end_blocked)
+	var terrain_blocked := MAP_TILE_DATA.get_obstacles(bs.active_map_tile_id)
+	var exit_destinations := _reachable_exit_destinations(player.pos, budget, end_blocked, terrain_blocked)
+	var reachable := Pathfinder.get_reachable(player.pos, budget, end_blocked, terrain_blocked, exit_destinations)
 	if reachable.is_empty():
 		bs.log_msg("  %s's move: no reachable tiles." % player.name)
 		return
@@ -1418,16 +1422,57 @@ func _resolve_player_move(player: PlayerState, budget: int) -> void:
 	highlighted_tiles.clear()
 	_pending_move_player_index = -1
 	_update_board()
-	var path := Pathfinder.find_path(player.pos, dest, end_blocked)
+	var path := Pathfinder.find_path(player.pos, dest, end_blocked, terrain_blocked, exit_destinations)
 	if path.is_empty() and dest != player.pos:
 		bs.log_msg("  %s: path not found." % player.name)
 		return
 	for step in path:
+		if not _is_in_board(step):
+			_cross_map_exit(player, step)
+			_update_ui()
+			return
 		player.pos = step
 		if board_3d:
 			await board_3d.animate_player_step(player.seat_index, step)
 		_update_ui()
 	bs.log_msg("  %s moves to %s." % [player.name, str(dest)])
+
+func _reachable_exit_destinations(from: Vector2i, budget: int, end_blocked: Array, terrain_blocked: Array) -> Array:
+	var result: Array = []
+	for exit in MAP_TILE_DATA.get_exits(bs.active_map_tile_id):
+		var cell: Vector2i = exit.get("cell")
+		if terrain_blocked.has(cell):
+			continue
+		var path := Pathfinder.find_path(from, cell, end_blocked, terrain_blocked)
+		if from == cell:
+			result.append(MAP_TILE_DATA.exit_destination(cell, String(exit.get("dir", ""))))
+			continue
+		if path.is_empty():
+			continue
+		var distance := path.size()
+		if distance <= budget - 1:
+			result.append(MAP_TILE_DATA.exit_destination(cell, String(exit.get("dir", ""))))
+	return result
+
+func _cross_map_exit(player: PlayerState, exit_dest: Vector2i) -> void:
+	var exit_dir := MAP_TILE_DATA.exit_dir_from_destination(exit_dest)
+	if exit_dir.is_empty():
+		return
+	var exit_cell := MAP_TILE_DATA.exit_cell_from_destination(exit_dest)
+	var entry_dir := MAP_TILE_DATA.opposite_dir(exit_dir)
+	var old_map_name := String(MAP_TILE_DATA.get_tile(bs.active_map_tile_id).get("name", bs.active_map_tile_id))
+	var next_map_id := MAP_TILE_DATA.get_random_connected_tile_id(exit_dir, bs.active_map_tile_id)
+	var occupied := bs.occupied_positions_for_player(player.seat_index)
+	var entry_cell := MAP_TILE_DATA.closest_open_entry(next_map_id, entry_dir, exit_cell, occupied)
+	bs.active_map_tile_id = next_map_id
+	player.pos = entry_cell
+	if board_3d:
+		board_3d.set_map_tile_id(bs.active_map_tile_id)
+	var new_map_name := String(MAP_TILE_DATA.get_tile(next_map_id).get("name", next_map_id))
+	bs.log_msg("  %s exits %s from the %s and enters %s at %s." % [player.name, old_map_name, exit_dir, new_map_name, str(entry_cell)])
+
+func _is_in_board(pos: Vector2i) -> bool:
+	return pos.x >= 0 and pos.x < Pathfinder.BOARD_SIZE and pos.y >= 0 and pos.y < Pathfinder.BOARD_SIZE
 
 func _choose_heal_target(player: PlayerState, fx: Dictionary) -> PlayerState:
 	var target_mode: String = String(fx.get("target", "self"))
@@ -1664,7 +1709,8 @@ func _enemy_move(enemy: EnemyState, steps: int, preferred_distance: int = 1) -> 
 	var end_blocked := bs.living_player_positions()
 	for pos in bs.living_enemy_positions(enemy.index):
 		end_blocked.append(pos)
-	var reachable := Pathfinder.get_reachable(enemy.pos, steps, end_blocked)
+	var terrain_blocked := MAP_TILE_DATA.get_obstacles(bs.active_map_tile_id)
+	var reachable := Pathfinder.get_reachable(enemy.pos, steps, end_blocked, terrain_blocked)
 	if reachable.is_empty():
 		return
 	var best_dest: Vector2i = enemy.pos
@@ -1682,7 +1728,7 @@ func _enemy_move(enemy: EnemyState, steps: int, preferred_distance: int = 1) -> 
 			best_steps_used = path_len
 	if best_dest == enemy.pos:
 		return
-	var path := Pathfinder.find_path(enemy.pos, best_dest, end_blocked)
+	var path := Pathfinder.find_path(enemy.pos, best_dest, end_blocked, terrain_blocked)
 	for step in path:
 		enemy.pos = step
 		if board_3d:
@@ -1699,7 +1745,8 @@ func _enemy_move_away(enemy: EnemyState, steps: int) -> void:
 	var end_blocked := bs.living_player_positions()
 	for epos in bs.living_enemy_positions(enemy.index):
 		end_blocked.append(epos)
-	var reachable := Pathfinder.get_reachable(enemy.pos, steps, end_blocked)
+	var terrain_blocked := MAP_TILE_DATA.get_obstacles(bs.active_map_tile_id)
+	var reachable := Pathfinder.get_reachable(enemy.pos, steps, end_blocked, terrain_blocked)
 	if reachable.is_empty():
 		return
 	var best_dest: Vector2i = enemy.pos
@@ -1712,7 +1759,7 @@ func _enemy_move_away(enemy: EnemyState, steps: int) -> void:
 			best_dist = d
 	if best_dest == enemy.pos:
 		return
-	var path := Pathfinder.find_path(enemy.pos, best_dest, end_blocked)
+	var path := Pathfinder.find_path(enemy.pos, best_dest, end_blocked, terrain_blocked)
 	for step in path:
 		enemy.pos = step
 		if board_3d:
@@ -2030,7 +2077,9 @@ func _show_level_up_overlay(player: PlayerState) -> void:
 # ─── Board Input Handlers ─────────────────────────────────────────────────────
 
 func _on_tile_pressed(pos: Vector2i) -> void:
-	if _pending_move_player_index >= 0 and highlighted_tiles.has(pos):
+	if _pending_move_player_index >= 0:
+		if not highlighted_tiles.has(pos):
+			return
 		if online_enabled and not online_is_host:
 			online_session.send_command({
 				"kind": "choose_move_destination",

@@ -10,11 +10,15 @@ const TILE_H    := 0.14
 const UNIT_H    := 0.82
 const ZOOM_MIN  := 5.8
 const ZOOM_MAX  := 14.0
+const MAP_TILE_DATA := preload("res://map_tile_data.gd")
 
 var _tile_mats: Array = []
+var _exit_mats: Dictionary = {}
 var _player_mis: Array = []
 var _enemy_mis: Array = []
 var _cam: Camera3D
+var _active_map_tile_id := MAP_TILE_DATA.DEFAULT_TILE_ID
+var _map_floor_mat: StandardMaterial3D = null
 var _player_colors := [
 	Color(0.22, 0.42, 0.88),
 	Color(0.16, 0.62, 0.46),
@@ -35,7 +39,9 @@ var _enemy_target_tweens: Dictionary = {}
 func setup() -> void:
 	_build_environment()
 	_build_light()
+	_build_map_floor()
 	_build_tiles()
+	_build_exit_tiles()
 	_build_units()
 	_build_camera()
 	update_board([], [], [], -1)
@@ -48,6 +54,12 @@ func get_zoom_size() -> float:
 
 func set_zoom_size(size: float) -> void:
 	_cam.size = clampf(size, ZOOM_MIN, ZOOM_MAX)
+
+func set_map_tile_id(tile_id: String) -> void:
+	if tile_id.is_empty():
+		return
+	_active_map_tile_id = tile_id
+	_update_map_floor_texture()
 
 func set_enemy_label(enemy_idx: int, label_text: String) -> void:
 	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size():
@@ -64,13 +76,14 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 			var mat: StandardMaterial3D = _tile_mats[y * 5 + x]
 			var gp := Vector2i(x, y)
 			if highlighted.has(gp):
-				mat.albedo_color = Color(0.08, 0.52, 0.40)
+				mat.albedo_color = Color(0.08, 0.72, 0.48, 0.42)
 				mat.emission_enabled = true
 				mat.emission = Color(0.04, 0.38, 0.28)
 				mat.emission_energy_multiplier = 0.6
 			else:
-				mat.albedo_color = Color(0.20, 0.20, 0.28)
+				mat.albedo_color = Color(0.20, 0.20, 0.28, 0.0)
 				mat.emission_enabled = false
+	_update_exit_tiles(highlighted)
 	for i in range(_player_mis.size()):
 		var mi: MeshInstance3D = _player_mis[i]
 		var mat := mi.material_override as StandardMaterial3D
@@ -107,8 +120,15 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 			enemy_mi.visible = false
 
 func flash_tile(pos: Vector2i, color: Color) -> void:
+	if _exit_mats.has(pos):
+		var exit_mat: StandardMaterial3D = _exit_mats[pos]
+		exit_mat.albedo_color = Color(color.r, color.g, color.b, 0.66)
+		exit_mat.emission_enabled = true
+		exit_mat.emission = color
+		exit_mat.emission_energy_multiplier = 1.0
+		return
 	var mat: StandardMaterial3D = _tile_mats[pos.y * 5 + pos.x]
-	mat.albedo_color = color
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.58)
 	mat.emission_enabled = true
 	mat.emission = color
 	mat.emission_energy_multiplier = 1.0
@@ -284,6 +304,29 @@ func _build_light() -> void:
 	sun.shadow_enabled = false
 	add_child(sun)
 
+func _build_map_floor() -> void:
+	var mi := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(5.0, 5.0)
+	mi.mesh = plane
+	mi.position = Vector3(2.0, 0.005, 2.0)
+
+	_map_floor_mat = StandardMaterial3D.new()
+	_map_floor_mat.roughness = 0.9
+	_map_floor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = _map_floor_mat
+	add_child(mi)
+	_update_map_floor_texture()
+
+func _update_map_floor_texture() -> void:
+	if _map_floor_mat == null:
+		return
+	var map_tile := MAP_TILE_DATA.get_tile(_active_map_tile_id)
+	var image_path: String = map_tile.get("image_path", "")
+	var image := Image.load_from_file(image_path)
+	if image != null:
+		_map_floor_mat.albedo_texture = ImageTexture.create_from_image(image)
+
 func _build_tiles() -> void:
 	var side := TILE_SIZE - TILE_GAP
 	for y in range(5):
@@ -305,13 +348,61 @@ func _build_tiles() -> void:
 			mi.mesh     = box
 			mi.position = Vector3(0.0, TILE_H * 0.5, 0.0)
 			var mat := StandardMaterial3D.new()
-			mat.albedo_color = Color(0.20, 0.20, 0.28)
+			mat.albedo_color = Color(0.20, 0.20, 0.28, 0.0)
 			mat.roughness    = 0.85
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			mi.material_override = mat
 			area.add_child(mi)
 
 			_tile_mats.append(mat)
 			area.input_event.connect(_on_tile_event.bind(Vector2i(x, y)))
+
+func _build_exit_tiles() -> void:
+	for i in range(Pathfinder.BOARD_SIZE):
+		_add_exit_tile(Vector2i(i, -1), Vector3(float(i), 0.0, -1.0))
+		_add_exit_tile(Vector2i(i, Pathfinder.BOARD_SIZE), Vector3(float(i), 0.0, float(Pathfinder.BOARD_SIZE)))
+		_add_exit_tile(Vector2i(-1, i), Vector3(-1.0, 0.0, float(i)))
+		_add_exit_tile(Vector2i(Pathfinder.BOARD_SIZE, i), Vector3(float(Pathfinder.BOARD_SIZE), 0.0, float(i)))
+
+func _add_exit_tile(gpos: Vector2i, world_pos: Vector3) -> void:
+	var side := TILE_SIZE - TILE_GAP
+	var area := Area3D.new()
+	area.position = world_pos
+	add_child(area)
+
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(side + 0.06, TILE_H + 0.14, side + 0.06)
+	col.shape = shape
+	col.position = Vector3(0.0, TILE_H * 0.5, 0.0)
+	area.add_child(col)
+
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(side, TILE_H * 0.72, side)
+	mi.mesh = box
+	mi.position = Vector3(0.0, TILE_H * 0.36, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.04, 0.70, 0.48, 0.0)
+	mat.roughness = 0.85
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mi.material_override = mat
+	area.add_child(mi)
+
+	_exit_mats[gpos] = mat
+	area.input_event.connect(_on_tile_event.bind(gpos))
+
+func _update_exit_tiles(highlighted: Array) -> void:
+	for gpos in _exit_mats.keys():
+		var mat: StandardMaterial3D = _exit_mats[gpos]
+		if highlighted.has(gpos):
+			mat.albedo_color = Color(0.04, 0.86, 0.56, 0.58)
+			mat.emission_enabled = true
+			mat.emission = Color(0.04, 0.42, 0.28)
+			mat.emission_energy_multiplier = 0.8
+		else:
+			mat.albedo_color = Color(0.04, 0.70, 0.48, 0.0)
+			mat.emission_enabled = false
 
 func _build_units() -> void:
 	_player_mis.clear()

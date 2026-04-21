@@ -2,6 +2,7 @@ class_name BattleState
 extends RefCounted
 
 const PlayerStateScript = preload("res://player_state.gd")
+const MAP_TILE_DATA = preload("res://map_tile_data.gd")
 
 enum Phase {
 	TITLE, SETUP, SELECT, REVEAL, RESOLVE, REFRESH, VICTORY, DEFEAT
@@ -17,6 +18,7 @@ var player_count: int = 1
 var players: Array = []
 var enemies: Array = []
 var selected_planning_player_index: int = 0
+var active_map_tile_id: String = MAP_TILE_DATA.DEFAULT_TILE_ID
 
 var current_phase: Phase = Phase.TITLE
 var round_number: int = 0
@@ -38,6 +40,7 @@ static func enemy_base_stats(enemy_type: String) -> Dictionary:
 
 func setup(p_player_count: int) -> void:
 	player_count = clampi(p_player_count, 1, MAX_PLAYERS)
+	active_map_tile_id = MAP_TILE_DATA.get_random_tile_id()
 	players.clear()
 	var spawns := _player_spawn_positions(player_count)
 	for i in range(player_count):
@@ -82,23 +85,41 @@ func setup(p_player_count: int) -> void:
 	combat_log.clear()
 
 func _player_spawn_positions(count: int) -> Array:
+	var preferred: Array = []
 	match count:
 		1:
-			return [Vector2i(2, 4)]
+			preferred = [Vector2i(2, 4)]
 		2:
-			return [Vector2i(1, 4), Vector2i(3, 4)]
+			preferred = [Vector2i(1, 4), Vector2i(3, 4)]
 		3:
-			return [Vector2i(1, 4), Vector2i(2, 4), Vector2i(3, 4)]
+			preferred = [Vector2i(1, 4), Vector2i(2, 4), Vector2i(3, 4)]
 		_:
-			return [Vector2i(0, 4), Vector2i(1, 4), Vector2i(3, 4), Vector2i(4, 4)]
+			preferred = [Vector2i(1, 4), Vector2i(2, 4), Vector2i(3, 4), Vector2i(4, 4)]
+	return _filter_spawn_positions(preferred, count)
+
+func _filter_spawn_positions(preferred: Array, count: int) -> Array:
+	var terrain_blocked := MAP_TILE_DATA.get_obstacles(active_map_tile_id)
+	var result: Array = []
+	for pos in preferred:
+		if not terrain_blocked.has(pos):
+			result.append(pos)
+	for y in range(Pathfinder.BOARD_SIZE - 1, -1, -1):
+		for x in range(Pathfinder.BOARD_SIZE):
+			if result.size() >= count:
+				return result
+			var fallback := Vector2i(x, y)
+			if not terrain_blocked.has(fallback) and not result.has(fallback):
+				result.append(fallback)
+	return result
 
 func _pick_enemy_spawn(occupied: Array, desired_min: int) -> Vector2i:
+	var terrain_blocked := MAP_TILE_DATA.get_obstacles(active_map_tile_id)
 	for min_d in range(desired_min, 0, -1):
 		var candidates: Array = []
 		for y in range(5):
 			for x in range(5):
 				var pos := Vector2i(x, y)
-				if occupied.has(pos):
+				if occupied.has(pos) or terrain_blocked.has(pos):
 					continue
 				var ok := true
 				for blocked in occupied:
@@ -113,11 +134,13 @@ func _pick_enemy_spawn(occupied: Array, desired_min: int) -> Vector2i:
 	for y in range(5):
 		for x in range(5):
 			var fallback := Vector2i(x, y)
-			if not occupied.has(fallback):
+			if not occupied.has(fallback) and not terrain_blocked.has(fallback):
 				return fallback
 	return Vector2i(2, 0)
 
 func setup_new_encounter() -> void:
+	active_map_tile_id = MAP_TILE_DATA.get_random_tile_id()
+	_relocate_players_for_active_map()
 	enemies.clear()
 	var enemy_count := randi_range(1, MAX_ENEMIES)
 	var occupied: Array = []
@@ -149,6 +172,34 @@ func setup_new_encounter() -> void:
 		enemies.append(enemy)
 		occupied.append(enemy.pos)
 	log_msg("A new wave of %d enemies approaches!" % enemy_count)
+
+func _relocate_players_for_active_map() -> void:
+	var terrain_blocked := MAP_TILE_DATA.get_obstacles(active_map_tile_id)
+	var occupied: Array = []
+	for player in players:
+		if not player.alive:
+			continue
+		if not terrain_blocked.has(player.pos) and not occupied.has(player.pos):
+			occupied.append(player.pos)
+			continue
+		player.pos = _nearest_open_tile(player.pos, occupied, terrain_blocked)
+		occupied.append(player.pos)
+
+func _nearest_open_tile(from: Vector2i, occupied: Array, terrain_blocked: Array) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_dist := 999
+	for y in range(Pathfinder.BOARD_SIZE):
+		for x in range(Pathfinder.BOARD_SIZE):
+			var pos := Vector2i(x, y)
+			if occupied.has(pos) or terrain_blocked.has(pos):
+				continue
+			var dist := Pathfinder.manhattan(from, pos)
+			if dist < best_dist:
+				best = pos
+				best_dist = dist
+	if best != Vector2i(-1, -1):
+		return best
+	return from
 
 func start_next_round() -> void:
 	round_number += 1
@@ -356,6 +407,7 @@ func to_dict() -> Dictionary:
 		"players": player_data,
 		"enemies": enemy_data,
 		"selected_planning_player_index": selected_planning_player_index,
+		"active_map_tile_id": active_map_tile_id,
 		"current_phase": int(current_phase),
 		"round_number": round_number,
 		"combat_log": combat_log.duplicate(),
@@ -374,6 +426,7 @@ func load_from_dict(data: Dictionary) -> void:
 		enemy.load_from_dict(enemy_entry)
 		enemies.append(enemy)
 	selected_planning_player_index = int(data.get("selected_planning_player_index", selected_planning_player_index))
+	active_map_tile_id = String(data.get("active_map_tile_id", active_map_tile_id))
 	current_phase = int(data.get("current_phase", int(current_phase)))
 	round_number = int(data.get("round_number", round_number))
 	combat_log = data.get("combat_log", []).duplicate()
