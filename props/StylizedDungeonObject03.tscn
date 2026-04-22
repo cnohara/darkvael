@@ -1,0 +1,49 @@
+[gd_scene format=4]
+
+[ext_resource type="Texture2D" path="res://assets/3d/stylized_dungeon_6.png" id="1_r1fwe"]
+[ext_resource type="Texture2D" path="res://assets/3d/stylized_dungeon_7.png" id="2_e1wp0"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ja5qx"]
+resource_name = "lambert3SG"
+cull_mode = 2
+albedo_texture = ExtResource("1_r1fwe")
+normal_enabled = true
+normal_texture = ExtResource("2_e1wp0")
+
+[sub_resource type="ArrayMesh" id="ArrayMesh_v5fm2"]
+_surfaces = [{
+"aabb": AABB(0, -200, 0, 1000, 1400, 200),
+"format": 34896613377,
+"index_count": 72,
+"index_data": PackedByteArray("AAABAAIAAwAAAAIAAwACAAQAAAAFAAEABQAGAAEABQAHAAYABwAIAAYABwAJAAgACgALAAwACgANAAsADgAKAAwADQAPAAsADgAMABAADQARAA8AEgAOABAAEQATAA8AEgAQABQAEQAVABMAFQAWABMAFQAXABYAGAASABQAGAAUABkAGgAYABkAGgAZABsA"),
+"name": "lambert3SG",
+"primitive": 3,
+"uv_scale": Vector4(0, 0, 0, 0),
+"vertex_count": 28,
+"vertex_data": PackedByteArray("AACSJP//AAAAACRJAAAAAAAAkiQAAAAAAAAAAP//AAAAAAAAAAAAAAAAJEn//wAAAAC2bQAAAAAAALZt//8AAAAAQnoAAAAAAABCev//AAAzM/////8AAGZm//8AAAAAMzP//wAAAABmZv////8AAAAA/////wAAmZn//wAAAAAAAP//AAAAAJmZ/////wAAAABs2///AADMzP//AAAAAAAAbNsAAAAAzMz/////AAD/////AAAAAP///////wAAAADatv//AAAAANq2AAAAAAAA9Kn//wAAAAD0qQAAAAA=")
+}]
+blend_shape_mode = 0
+
+[sub_resource type="ArrayMesh" id="ArrayMesh_mav8j"]
+resource_name = "Sketchfab_Scene_Object_1"
+_surfaces = [{
+"aabb": AABB(0, -200, 0, 1000, 1400, 200),
+"attribute_data": PackedByteArray("ggB8/3z/ggCCAIIAfP98/4IAfP98/4IAggCCAHz/fP+CAHz/fP+CAIIAggB8/3z/ggB8/3z/ggCCAIIAfP98/4IAfP//V4IAggCCAP9XfP+CAHz/fP+CAIIAggB8/3z/ggB8/3z/ggCCAIIAfP98/4IAfP98/4IAggCCAHz/fP+JpXz/fP+CAImlggB8/3z/ggB8/3z/ggCCAIIAfP98/4IAfP98/4IAggCCAHz/fP+CAHz/fP+CAIIAggB8/3z/"),
+"format": 34896613399,
+"index_count": 72,
+"index_data": PackedByteArray("AAABAAIAAAADAAEABAAFAAYABAAHAAUACAAJAAoACAALAAkADAANAA4ADAAPAA0AEAARABIAEAATABEAFAAVABYAFAAXABUAGAAZABoAGAAbABkAHAAdAB4AHAAfAB0AIAAhACIAIAAjACEAJAAlACYAJAAnACUAKAApACoAKAArACkALAAtAC4ALAAvAC0A"),
+"material": SubResource("StandardMaterial3D_ja5qx"),
+"name": "lambert3SG",
+"primitive": 3,
+"uv_scale": Vector4(0, 0, 0, 0),
+"vertex_count": 48,
+"vertex_data": PackedByteArray("AACSJP//VNUAACRJAABU1QAAkiQAAFTVAAAkSf//VNUAAAAA//9U1QAAkiQAAFTVAAAAAAAAVNUAAJIk//9U1TMz//////+/Zmb//wAA/78zM///AAD/v2Zm//////+/AAD//////78zM///AAD/vwAA//8AAP+/MzP//////78AALZt//9U1QAAQnoAAFTVAAC2bQAAVNUAAEJ6//9U1QAAJEn//1TVAAC2bQAAVNUAACRJAABU1QAAtm3//1TVAABs2///VNUAAP//AABU1QAAbNsAAFTVAAD/////VNUAANq2//9U1QAAbNsAAFTVAADatgAAVNUAAGzb//9U1QAA9Kn//1TVAADatgAAVNUAAPSpAABU1QAA2rb//1TVmZn//////7/MzP//AAD/v5mZ//8AAP+/zMz//////79mZv//////v5mZ//8AAP+/Zmb//wAA/7+Zmf//////v8zM//////+//////wAA/7/MzP//AAD/v/////////+/qiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqioAAP9/AAD/fwAA/38AAP9/AAD/fwAA/38AAP9/AAD/f6oqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqqiqqKqoqAAD/fwAA/38AAP9/AAD/fwAA/38AAP9/AAD/fwAA/38AAP9/AAD/fwAA/38AAP9/")
+}]
+blend_shape_mode = 0
+shadow_mesh = SubResource("ArrayMesh_v5fm2")
+
+[node name="StylizedDungeonObject03" type="Node3D" unique_id=1021284990]
+
+[node name="Visual" type="MeshInstance3D" parent="." unique_id=322341752]
+transform = Transform3D(0.0009, 0, 0, 0, 0.0009, 0, 0, 0, 0.0009, -0.45, 0.18, -0.09)
+mesh = SubResource("ArrayMesh_mav8j")

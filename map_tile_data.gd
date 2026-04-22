@@ -6,69 +6,31 @@ const DIR_SOUTH := "south"
 const DIR_WEST := "west"
 const DEFAULT_TILE_ID := "map_tile_1"
 
-const MAP_TILE_1 := {
-	"id": "map_tile_1",
-	"name": "Map Tile 1",
-	"image_path": "res://assets/maps/map_tiles_card1.png",
-	"obstacles": [
-		Vector2i(0, 0),
-		Vector2i(0, 2),
-		Vector2i(0, 4),
-		Vector2i(2, 2),
-	],
-	"exits": [
-		{ "cell": Vector2i(1, 0), "dir": DIR_SOUTH },
-		{ "cell": Vector2i(2, 0), "dir": DIR_SOUTH },
-		{ "cell": Vector2i(1, 4), "dir": DIR_NORTH },
-		{ "cell": Vector2i(2, 4), "dir": DIR_NORTH },
-		{ "cell": Vector2i(4, 0), "dir": DIR_EAST },
-		{ "cell": Vector2i(4, 1), "dir": DIR_EAST },
-		{ "cell": Vector2i(4, 2), "dir": DIR_EAST },
-		{ "cell": Vector2i(4, 3), "dir": DIR_EAST },
-		{ "cell": Vector2i(4, 4), "dir": DIR_EAST },
-	],
-	"torches": [
-		{ "cell": Vector2i(0, 0), "dir": DIR_WEST },
-		{ "cell": Vector2i(0, 4), "dir": DIR_WEST },
-	],
-	"props": [
-		{
-			"asset": "res://assets/3d/crates_and_barrels.glb",
-			"node": "C16",
-			"cell": Vector2i(2, 2),
-			"rotation": 0.0,
-			"scale": 1.0,
-			"offset": Vector3(0.12, 0.0, 0.08),
-		},
-	],
-	"walls": [],
-}
-
-const MAP_TILE_2 := {
-	"id": "map_tile_2",
-	"name": "Map Tile 2",
-	"image_path": "res://assets/maps/map_tiles_card2.png",
-	"obstacles": [
-		Vector2i(0, 0),
-		Vector2i(3, 1),
-		Vector2i(4, 0),
-		Vector2i(4, 4),
-	],
-	"exits": [
-		{ "cell": Vector2i(2, 0), "dir": DIR_SOUTH },
-		{ "cell": Vector2i(0, 2), "dir": DIR_WEST },
-		{ "cell": Vector2i(2, 4), "dir": DIR_NORTH },
-	],
-	"walls": [],
-}
-
-const ALL_TILES := {
-	"map_tile_1": MAP_TILE_1,
-	"map_tile_2": MAP_TILE_2,
+const TILE_SCENES := {
+	"map_tile_1": "res://maps/map_tile_1/MapTile1Visual.tscn",
+	"map_tile_2": "res://maps/map_tile_2/MapTile2Visual.tscn",
 }
 
 static func get_tile(tile_id: String) -> Dictionary:
-	return ALL_TILES.get(tile_id, {})
+	var tile = instantiate_tile(tile_id)
+	if tile == null:
+		return {}
+	var data: Dictionary = tile.to_tile_dict()
+	tile.free()
+	return data
+
+static func instantiate_tile(tile_id: String):
+	var scene_path := String(TILE_SCENES.get(tile_id, ""))
+	if scene_path.is_empty():
+		return null
+	var scene := load(scene_path) as PackedScene
+	if scene == null:
+		return null
+	var instance := scene.instantiate()
+	return instance
+
+static func get_tile_scene_path(tile_id: String) -> String:
+	return String(TILE_SCENES.get(tile_id, ""))
 
 static func get_obstacles(tile_id: String = DEFAULT_TILE_ID) -> Array:
 	return get_tile(tile_id).get("obstacles", [])
@@ -83,7 +45,7 @@ static func get_props(tile_id: String = DEFAULT_TILE_ID) -> Array:
 	return get_tile(tile_id).get("props", [])
 
 static func get_tile_ids() -> Array:
-	return ALL_TILES.keys()
+	return TILE_SCENES.keys()
 
 static func get_random_tile_id() -> String:
 	var ids := get_tile_ids()
@@ -95,7 +57,7 @@ static func get_random_connected_tile_id(exit_dir: String, exclude_tile_id: Stri
 	var entry_dir := opposite_dir(exit_dir)
 	var candidates: Array = []
 	for tile_id in get_tile_ids():
-		if tile_id == exclude_tile_id and ALL_TILES.size() > 1:
+		if tile_id == exclude_tile_id and TILE_SCENES.size() > 1:
 			continue
 		if has_exit_on_side(String(tile_id), entry_dir):
 			candidates.append(tile_id)

@@ -5,8 +5,8 @@ signal move_dest_chosen(pos: Vector2i)
 signal attack_target_chosen(enemy_idx: int)
 signal next_round_confirmed
 
-const CARD_PANEL_SIZE := Vector2(102, 104)
-const PLAYER_PANEL_WIDTH := 540
+const CARD_PANEL_SIZE := Vector2(88, 88)
+const PLAYER_PANEL_WIDTH := 470
 const PLAYER_MAX_SELECTED := 3
 const PLAYER_HAND_SIZE := 5
 const ACTIVE_PLAYER_COLOR := Color(0.16, 0.28, 0.48)
@@ -39,7 +39,7 @@ var _pending_attack_player_index := -1
 var _targetable_enemy_indices: Array = []
 var _active_target_enemy_idx := -1
 var _enemy_panel_target_tweens: Dictionary = {}
-var _board_zoom_size := Board3D.ZOOM_MIN
+var _board_zoom_size := Board3D.ZOOM_DEFAULT
 var online_session = null
 var online_enabled := false
 var online_is_host := false
@@ -113,18 +113,6 @@ func _connect_online_session() -> void:
 		online_session.request_failed.connect(_on_online_request_failed)
 
 func _input(event: InputEvent) -> void:
-	if board_3d:
-		if event is InputEventMagnifyGesture:
-			board_3d.adjust_zoom(event.factor)
-			_board_zoom_size = board_3d.get_zoom_size()
-		elif event is InputEventMouseButton and event.pressed:
-			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				board_3d.adjust_zoom(1.12)
-				_board_zoom_size = board_3d.get_zoom_size()
-			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				board_3d.adjust_zoom(0.89)
-				_board_zoom_size = board_3d.get_zoom_size()
-
 	if event is InputEventKey and event.pressed:
 		if ui_locked or bs.current_phase != BattleState.Phase.SELECT:
 			return
@@ -152,12 +140,11 @@ func _build_ui() -> void:
 	add_child(margin)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 8)
+	root.add_theme_constant_override("separation", 6)
 	margin.add_child(root)
 
 	_build_top_bar(root)
 	_build_main_row(root)
-	_build_log(root)
 
 	_screen_flash = ColorRect.new()
 	_screen_flash.color = Color(0.75, 0.05, 0.05, 0.0)
@@ -167,7 +154,7 @@ func _build_ui() -> void:
 
 func _build_top_bar(parent: Control) -> void:
 	var top := VBoxContainer.new()
-	top.add_theme_constant_override("separation", 4)
+	top.add_theme_constant_override("separation", 3)
 	parent.add_child(top)
 
 	var row := HBoxContainer.new()
@@ -219,7 +206,7 @@ func _build_top_bar(parent: Control) -> void:
 	order_area.add_child(order_lbl)
 
 	_turn_order_row = Control.new()
-	_turn_order_row.custom_minimum_size = Vector2(0, 54)
+	_turn_order_row.custom_minimum_size = Vector2(0, 44)
 	_turn_order_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_turn_order_row.visible = true
 	order_area.add_child(_turn_order_row)
@@ -249,10 +236,14 @@ func _build_players_column(parent: Control) -> void:
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	outer.add_child(scroll)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	outer.add_child(column)
+	column.add_child(scroll)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.add_theme_constant_override("separation", 6)
 	scroll.add_child(vbox)
 
 	_player_cards.clear()
@@ -265,7 +256,7 @@ func _build_players_column(parent: Control) -> void:
 		vbox.add_child(panel)
 
 		var panel_vbox := VBoxContainer.new()
-		panel_vbox.add_theme_constant_override("separation", 4)
+		panel_vbox.add_theme_constant_override("separation", 3)
 		panel.add_child(panel_vbox)
 
 		var header := HBoxContainer.new()
@@ -291,7 +282,7 @@ func _build_players_column(parent: Control) -> void:
 
 		var ready_btn := Button.new()
 		ready_btn.text = "Ready"
-		ready_btn.custom_minimum_size = Vector2(84, 32)
+		ready_btn.custom_minimum_size = Vector2(76, 28)
 		_style_btn(ready_btn, Color(0.18, 0.45, 0.22))
 		ready_btn.pressed.connect(_on_ready_pressed.bind(seat_index))
 		header.add_child(ready_btn)
@@ -301,7 +292,7 @@ func _build_players_column(parent: Control) -> void:
 		panel_vbox.add_child(meta_lbl)
 
 		var stamina_holder := Control.new()
-		stamina_holder.custom_minimum_size = Vector2(0, 26)
+		stamina_holder.custom_minimum_size = Vector2(0, 22)
 		panel_vbox.add_child(stamina_holder)
 
 		var stamina_lbl := _lbl("Stamina: 3/3")
@@ -340,18 +331,18 @@ func _build_players_column(parent: Control) -> void:
 
 			var rot_btn := Button.new()
 			rot_btn.text = "\u21bb Mv"
-			rot_btn.custom_minimum_size = Vector2(102, 22)
+			rot_btn.custom_minimum_size = Vector2(CARD_PANEL_SIZE.x, 20)
 			_style_btn(rot_btn, Color(0.28, 0.22, 0.44))
-			rot_btn.add_theme_font_size_override("font_size", 14)
+			rot_btn.add_theme_font_size_override("font_size", 12)
 			rot_btn.pressed.connect(_try_rotate_card.bind(seat_index, hand_idx, "move"))
 			slot_vbox.add_child(rot_btn)
 			seat_rotate_btns.append(rot_btn)
 
 			var block_btn := Button.new()
 			block_btn.text = "\u21bb Blk"
-			block_btn.custom_minimum_size = Vector2(102, 22)
+			block_btn.custom_minimum_size = Vector2(CARD_PANEL_SIZE.x, 20)
 			_style_btn(block_btn, Color(0.18, 0.32, 0.46))
-			block_btn.add_theme_font_size_override("font_size", 14)
+			block_btn.add_theme_font_size_override("font_size", 12)
 			block_btn.pressed.connect(_try_rotate_card.bind(seat_index, hand_idx, "block"))
 			slot_vbox.add_child(block_btn)
 			seat_rotate_block_btns.append(block_btn)
@@ -379,11 +370,15 @@ func _build_players_column(parent: Control) -> void:
 			"hand_cards": hand_cards,
 		})
 
+	_build_log(column)
+
 func _build_board(parent: Control) -> void:
 	var svc := SubViewportContainer.new()
 	svc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	svc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	svc.stretch = true
+	svc.mouse_filter = Control.MOUSE_FILTER_STOP
+	svc.gui_input.connect(_on_board_view_gui_input)
 	parent.add_child(svc)
 
 	var sv := SubViewport.new()
@@ -437,29 +432,36 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel_vbox.add_theme_constant_override("separation", 2)
 		panel.add_child(panel_vbox)
 
-		panel_vbox.add_child(_lbl("Enemy %d" % (i + 1), true))
+		var title_lbl := _lbl("Enemy %d" % (i + 1), true)
+		title_lbl.add_theme_font_size_override("font_size", 17)
+		panel_vbox.add_child(title_lbl)
 		var hp_lbl := _lbl("HP: 6/6")
+		hp_lbl.add_theme_font_size_override("font_size", 15)
 		hp_lbl.add_theme_color_override("font_color", ENEMY_HP_BASE_COLOR)
 		panel_vbox.add_child(hp_lbl)
 		_enemy_hp_lbls.append(hp_lbl)
 
 		var block_lbl := _lbl("Block: 0")
+		block_lbl.add_theme_font_size_override("font_size", 15)
 		block_lbl.add_theme_color_override("font_color", Color(0.52, 0.72, 0.98))
 		panel_vbox.add_child(block_lbl)
 		_enemy_block_lbls.append(block_lbl)
 
 		var status_lbl := _lbl("")
+		status_lbl.add_theme_font_size_override("font_size", 15)
 		status_lbl.add_theme_color_override("font_color", ENEMY_STATUS_BASE_COLOR)
 		panel_vbox.add_child(status_lbl)
 		_enemy_status_lbls.append(status_lbl)
 
 		var behavior_lbl := _lbl("Intent: ?\n\n")
+		behavior_lbl.add_theme_font_size_override("font_size", 15)
 		behavior_lbl.clip_text = false
-		behavior_lbl.custom_minimum_size = Vector2(0, 66)
+		behavior_lbl.custom_minimum_size = Vector2(0, 50)
 		panel_vbox.add_child(behavior_lbl)
 		_enemy_behavior_lbls.append(behavior_lbl)
 
 		var deck_lbl := _lbl("Draw: 6  Discard: 0")
+		deck_lbl.add_theme_font_size_override("font_size", 15)
 		deck_lbl.add_theme_color_override("font_color", Color(0.64, 0.66, 0.74))
 		panel_vbox.add_child(deck_lbl)
 		_enemy_deck_lbls.append(deck_lbl)
@@ -471,31 +473,32 @@ func _build_enemy_panel(parent: Control) -> void:
 		_enemy_prev_status.append(null)
 
 func _build_log(parent: Control) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	parent.add_child(row)
-
 	_log_scroll = ScrollContainer.new()
-	_log_scroll.custom_minimum_size = Vector2(0, 120)
+	_log_scroll.custom_minimum_size = Vector2(0, 96)
 	_log_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_log_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	row.add_child(_log_scroll)
+	parent.add_child(_log_scroll)
 
 	log_lbl = Label.new()
 	log_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_lbl.add_theme_color_override("font_color", Color(0.76, 0.76, 0.84))
-	log_lbl.add_theme_font_size_override("font_size", 18)
+	log_lbl.add_theme_font_size_override("font_size", 15)
 	log_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_log_scroll.add_child(log_lbl)
 
+	var button_row := HBoxContainer.new()
+	button_row.add_theme_constant_override("separation", 8)
+	parent.add_child(button_row)
+	button_row.add_child(_expand_spacer())
+
 	next_round_btn = Button.new()
 	next_round_btn.text = "Next Round"
-	next_round_btn.custom_minimum_size = Vector2(124, 40)
+	next_round_btn.custom_minimum_size = Vector2(144, 38)
 	next_round_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_style_btn(next_round_btn, Color(0.18, 0.38, 0.52))
 	next_round_btn.visible = false
 	next_round_btn.pressed.connect(_on_next_round_pressed)
-	row.add_child(next_round_btn)
+	button_row.add_child(next_round_btn)
 
 func _start_battle() -> void:
 	_level_up_queue.clear()
@@ -653,7 +656,7 @@ func _update_ui() -> void:
 				block_btn.disabled = not can_edit or hand_card == null or not player.can_select(CardData.create_rotate_block_card(hand_card.card_name, hand_card.initiative))
 
 	_update_board()
-	var log_lines: Array = bs.combat_log.slice(maxi(0, bs.combat_log.size() - 8))
+	var log_lines: Array = bs.combat_log.slice(maxi(0, bs.combat_log.size() - 4))
 	log_lbl.text = "\n".join(log_lines)
 	if _log_scroll:
 		_log_scroll.set_deferred("scroll_vertical", 999999)
@@ -688,6 +691,12 @@ func _planning_hint_text() -> String:
 	if player.stun:
 		return "%s is stunned. Choose only 1 card, then press Ready." % player.name
 	return "%s is active. Click hand cards to select, or rotate any card for +1 Move / +1 Block." % player.name
+
+func _on_board_view_gui_input(event: InputEvent) -> void:
+	if board_3d == null:
+		return
+	if board_3d.handle_camera_input(event):
+		_board_zoom_size = board_3d.get_zoom_size()
 
 func _phase_text(phase: int) -> String:
 	match phase:

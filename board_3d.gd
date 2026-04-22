@@ -8,19 +8,26 @@ const TILE_SIZE := 1.0
 const TILE_GAP  := 0.07
 const TILE_H    := 0.14
 const UNIT_H    := 0.82
-const ZOOM_MIN  := 5.8
+const ZOOM_MIN  := 2.6
+const ZOOM_DEFAULT := 6.0
 const ZOOM_MAX  := 14.0
+const CAMERA_ROTATE_SPEED := 0.008
+const CAMERA_PAN_SPEED := 1.0
 const WALL_H    := 0.72
 const MAP_TILE_DATA := preload("res://map_tile_data.gd")
 
 var _tile_mats: Array = []
 var _exit_mats: Dictionary = {}
+var _map_visual_root: Node3D = null
 var _map_dressing_root: Node3D = null
 var _player_mis: Array = []
 var _enemy_mis: Array = []
 var _cam: Camera3D
+var _cam_target := Vector3(2.0, 0.0, 2.0)
+var _cam_yaw := 0.0
+var _cam_pitch := 0.0
+var _cam_distance := 9.0
 var _active_map_tile_id := MAP_TILE_DATA.DEFAULT_TILE_ID
-var _map_floor_mat: StandardMaterial3D = null
 var _player_colors := [
 	Color(0.22, 0.42, 0.88),
 	Color(0.16, 0.62, 0.46),
@@ -41,7 +48,7 @@ var _enemy_target_tweens: Dictionary = {}
 func setup() -> void:
 	_build_environment()
 	_build_light()
-	_build_map_floor()
+	_rebuild_map_visual()
 	_build_tiles()
 	_build_exit_tiles()
 	_rebuild_map_dressing()
@@ -58,11 +65,57 @@ func get_zoom_size() -> float:
 func set_zoom_size(size: float) -> void:
 	_cam.size = clampf(size, ZOOM_MIN, ZOOM_MAX)
 
+func handle_camera_input(event: InputEvent) -> bool:
+	if _cam == null:
+		return false
+	if event is InputEventMagnifyGesture:
+		adjust_zoom(event.factor)
+		return true
+	if event is InputEventMouseButton and event.pressed:
+		match event.button_index:
+			MOUSE_BUTTON_WHEEL_UP:
+				adjust_zoom(1.14)
+				return true
+			MOUSE_BUTTON_WHEEL_DOWN:
+				adjust_zoom(0.88)
+				return true
+	if event is InputEventMouseMotion:
+		var motion := event as InputEventMouseMotion
+		var right_drag := (motion.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0
+		var middle_drag := (motion.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0
+		if middle_drag or (right_drag and motion.shift_pressed):
+			pan_camera(motion.relative)
+			return true
+		if right_drag:
+			orbit_camera(motion.relative)
+			return true
+	return false
+
+func orbit_camera(delta: Vector2) -> void:
+	_cam_yaw -= delta.x * CAMERA_ROTATE_SPEED
+	_cam_pitch = clampf(_cam_pitch + delta.y * CAMERA_ROTATE_SPEED, deg_to_rad(24.0), deg_to_rad(72.0))
+	_apply_camera_transform()
+
+func pan_camera(delta: Vector2) -> void:
+	var viewport_height := maxf(1.0, float(get_viewport().get_visible_rect().size.y))
+	var world_per_pixel := _cam.size / viewport_height
+	var right := _cam.global_transform.basis.x
+	var forward := -_cam.global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.001:
+		forward = Vector3.FORWARD
+	else:
+		forward = forward.normalized()
+	var pan := (-right * delta.x + forward * delta.y) * world_per_pixel * CAMERA_PAN_SPEED
+	pan.y = 0.0
+	_cam_target += pan
+	_apply_camera_transform()
+
 func set_map_tile_id(tile_id: String) -> void:
 	if tile_id.is_empty() or tile_id == _active_map_tile_id:
 		return
 	_active_map_tile_id = tile_id
-	_update_map_floor_texture()
+	_rebuild_map_visual()
 	_rebuild_map_dressing()
 
 func set_enemy_label(enemy_idx: int, label_text: String) -> void:
@@ -309,28 +362,16 @@ func _build_light() -> void:
 	sun.shadow_enabled = false
 	add_child(sun)
 
-func _build_map_floor() -> void:
-	var mi := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(5.0, 5.0)
-	mi.mesh = plane
-	mi.position = Vector3(2.0, 0.005, 2.0)
-
-	_map_floor_mat = StandardMaterial3D.new()
-	_map_floor_mat.roughness = 0.9
-	_map_floor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mi.material_override = _map_floor_mat
-	add_child(mi)
-	_update_map_floor_texture()
-
-func _update_map_floor_texture() -> void:
-	if _map_floor_mat == null:
+func _rebuild_map_visual() -> void:
+	if _map_visual_root != null:
+		_map_visual_root.queue_free()
+		_map_visual_root = null
+	var tile_scene = MAP_TILE_DATA.instantiate_tile(_active_map_tile_id)
+	if tile_scene == null:
 		return
-	var map_tile := MAP_TILE_DATA.get_tile(_active_map_tile_id)
-	var image_path: String = map_tile.get("image_path", "")
-	var image := Image.load_from_file(image_path)
-	if image != null:
-		_map_floor_mat.albedo_texture = ImageTexture.create_from_image(image)
+	_map_visual_root = tile_scene
+	_map_visual_root.name = "MapVisual_%s" % _active_map_tile_id
+	add_child(_map_visual_root)
 
 func _build_tiles() -> void:
 	var side := TILE_SIZE - TILE_GAP
@@ -421,14 +462,6 @@ func _rebuild_map_dressing() -> void:
 		_add_wall_segment(wall.get("cell"), String(wall.get("dir", "")))
 	for exit in MAP_TILE_DATA.get_exits(_active_map_tile_id):
 		_add_exit_dressing(exit.get("cell"), String(exit.get("dir", "")))
-	var prop_cells := []
-	for prop in MAP_TILE_DATA.get_props(_active_map_tile_id):
-		var prop_cell: Vector2i = prop.get("cell")
-		prop_cells.append(prop_cell)
-		_add_prop_dressing(prop)
-	for obstacle in MAP_TILE_DATA.get_obstacles(_active_map_tile_id):
-		if not prop_cells.has(obstacle):
-			_add_obstacle_dressing(obstacle)
 	for torch in MAP_TILE_DATA.get_torches(_active_map_tile_id):
 		_add_torch_dressing(torch.get("cell"), String(torch.get("dir", "")))
 
@@ -811,11 +844,24 @@ func _unit_mesh(color: Color, label_text: String, label_color: Color) -> MeshIns
 func _build_camera() -> void:
 	_cam            = Camera3D.new()
 	_cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_cam.size       = ZOOM_MIN
+	_cam.size       = ZOOM_DEFAULT
 	_cam.current    = true
-	_cam.position   = Vector3(5.5, 5.8, 8.06)
 	add_child(_cam)
-	_cam.look_at(Vector3(2.0, 0.0, 2.0), Vector3.UP)
+	var initial_offset := Vector3(5.5, 5.8, 8.06) - _cam_target
+	_cam_distance = initial_offset.length()
+	_cam_yaw = atan2(initial_offset.x, initial_offset.z)
+	_cam_pitch = asin(initial_offset.y / _cam_distance)
+	_apply_camera_transform()
+
+func _apply_camera_transform() -> void:
+	var horizontal := cos(_cam_pitch) * _cam_distance
+	var offset := Vector3(
+		sin(_cam_yaw) * horizontal,
+		sin(_cam_pitch) * _cam_distance,
+		cos(_cam_yaw) * horizontal
+	)
+	_cam.position = _cam_target + offset
+	_cam.look_at(_cam_target, Vector3.UP)
 
 func _on_tile_event(_cam_node: Camera3D, ev: InputEvent,
 		_ep: Vector3, _n: Vector3, _si: int, gpos: Vector2i) -> void:

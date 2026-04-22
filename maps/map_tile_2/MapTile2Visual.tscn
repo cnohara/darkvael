@@ -1,0 +1,25 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://map_tile_scene.gd" id="1_script"]
+[ext_resource type="Texture2D" path="res://assets/maps/map_tiles_card2.png" id="1_floor"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
+shading_mode = 0
+albedo_texture = ExtResource("1_floor")
+roughness = 0.9
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+size = Vector2(5, 5)
+
+[node name="MapTile2Visual" type="Node3D"]
+script = ExtResource("1_script")
+map_id = "map_tile_2"
+display_name = "Map Tile 2"
+image_path = "res://assets/maps/map_tiles_card2.png"
+obstacles = Array[Vector2i]([Vector2i(0, 0), Vector2i(3, 1), Vector2i(4, 0), Vector2i(4, 4)])
+exits = Array[Dictionary]([{ "cell": Vector2i(2, 0), "dir": "south" }, { "cell": Vector2i(0, 2), "dir": "west" }, { "cell": Vector2i(2, 4), "dir": "north" }])
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.005, 2)
+material_override = SubResource("StandardMaterial3D_floor")
+mesh = SubResource("PlaneMesh_floor")
