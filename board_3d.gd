@@ -10,10 +10,12 @@ const TILE_H    := 0.14
 const UNIT_H    := 0.82
 const ZOOM_MIN  := 5.8
 const ZOOM_MAX  := 14.0
+const WALL_H    := 0.72
 const MAP_TILE_DATA := preload("res://map_tile_data.gd")
 
 var _tile_mats: Array = []
 var _exit_mats: Dictionary = {}
+var _map_dressing_root: Node3D = null
 var _player_mis: Array = []
 var _enemy_mis: Array = []
 var _cam: Camera3D
@@ -42,6 +44,7 @@ func setup() -> void:
 	_build_map_floor()
 	_build_tiles()
 	_build_exit_tiles()
+	_rebuild_map_dressing()
 	_build_units()
 	_build_camera()
 	update_board([], [], [], -1)
@@ -56,10 +59,11 @@ func set_zoom_size(size: float) -> void:
 	_cam.size = clampf(size, ZOOM_MIN, ZOOM_MAX)
 
 func set_map_tile_id(tile_id: String) -> void:
-	if tile_id.is_empty():
+	if tile_id.is_empty() or tile_id == _active_map_tile_id:
 		return
 	_active_map_tile_id = tile_id
 	_update_map_floor_texture()
+	_rebuild_map_dressing()
 
 func set_enemy_label(enemy_idx: int, label_text: String) -> void:
 	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size():
@@ -90,7 +94,7 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 		if i < player_positions.size() and player_positions[i] != Vector2i(-1, -1):
 			mi.visible = true
 			var pp: Vector2i = player_positions[i]
-			mi.position = Vector3(float(pp.x), TILE_H + UNIT_H * 0.5, float(pp.y))
+			mi.position = _grid_to_world(pp, TILE_H + UNIT_H * 0.5)
 			if mat != null:
 				mat.emission_enabled = i == active_player_idx
 				mat.emission = Color(0.95, 0.90, 0.40)
@@ -103,7 +107,7 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 		if i < enemy_positions.size() and enemy_positions[i] != Vector2i(-1, -1):
 			enemy_mi.visible = true
 			var enemy_pos: Vector2i = enemy_positions[i]
-			enemy_mi.position = Vector3(float(enemy_pos.x), TILE_H + UNIT_H * 0.5, float(enemy_pos.y))
+			enemy_mi.position = _grid_to_world(enemy_pos, TILE_H + UNIT_H * 0.5)
 			if mat != null:
 				mat.albedo_color = _enemy_colors[i]
 				mat.emission_enabled = false
@@ -159,7 +163,7 @@ func animate_enemy_step(enemy_idx: int, target_grid: Vector2i) -> void:
 
 func _animate_step_mesh(mi: MeshInstance3D, target_grid: Vector2i) -> void:
 	var from := mi.position
-	var to   := Vector3(float(target_grid.x), TILE_H + UNIT_H * 0.5, float(target_grid.y))
+	var to   := _grid_to_world(target_grid, TILE_H + UNIT_H * 0.5)
 	var hop  := 0.48
 
 	var step_fn := func(t: float) -> void:
@@ -174,12 +178,13 @@ func _animate_step_mesh(mi: MeshInstance3D, target_grid: Vector2i) -> void:
 	await tween.finished
 
 func animate_melee_attack(from_pos: Vector2i, to_pos: Vector2i) -> void:
-	var world := Vector3(float(from_pos.x), TILE_H + UNIT_H * 0.65, float(from_pos.y))
+	var world := _grid_to_world(from_pos, TILE_H + UNIT_H * 0.65)
+	var target_world := _grid_to_world(to_pos, TILE_H + UNIT_H * 0.65)
 
 	var pivot := Node3D.new()
 	pivot.position = world
-	var dx := float(to_pos.x - from_pos.x)
-	var dz := float(to_pos.y - from_pos.y)
+	var dx := target_world.x - world.x
+	var dz := target_world.z - world.z
 	pivot.rotation.y = atan2(dx, dz)
 	pivot.rotation_degrees.x = -65.0
 	add_child(pivot)
@@ -235,8 +240,8 @@ func _animate_hit_mesh(mi: MeshInstance3D) -> void:
 	mi.position = origin
 
 func animate_ranged_attack(from_pos: Vector2i, to_pos: Vector2i) -> void:
-	var from_w := Vector3(float(from_pos.x), TILE_H + UNIT_H * 0.72, float(from_pos.y))
-	var to_w   := Vector3(float(to_pos.x),   TILE_H + UNIT_H * 0.72, float(to_pos.y))
+	var from_w := _grid_to_world(from_pos, TILE_H + UNIT_H * 0.72)
+	var to_w   := _grid_to_world(to_pos, TILE_H + UNIT_H * 0.72)
 
 	var proj := MeshInstance3D.new()
 	var sph  := SphereMesh.new()
@@ -260,7 +265,7 @@ func animate_ranged_attack(from_pos: Vector2i, to_pos: Vector2i) -> void:
 	proj.queue_free()
 
 func animate_block(target_pos: Vector2i) -> void:
-	var world := Vector3(float(target_pos.x), TILE_H + UNIT_H * 0.55, float(target_pos.y))
+	var world := _grid_to_world(target_pos, TILE_H + UNIT_H * 0.55)
 
 	var shield := MeshInstance3D.new()
 	var bm     := BoxMesh.new()
@@ -332,7 +337,7 @@ func _build_tiles() -> void:
 	for y in range(5):
 		for x in range(5):
 			var area  := Area3D.new()
-			area.position = Vector3(float(x) * TILE_SIZE, 0.0, float(y) * TILE_SIZE)
+			area.position = _grid_to_world(Vector2i(x, y), 0.0)
 			add_child(area)
 
 			var col   := CollisionShape3D.new()
@@ -359,10 +364,10 @@ func _build_tiles() -> void:
 
 func _build_exit_tiles() -> void:
 	for i in range(Pathfinder.BOARD_SIZE):
-		_add_exit_tile(Vector2i(i, -1), Vector3(float(i), 0.0, -1.0))
-		_add_exit_tile(Vector2i(i, Pathfinder.BOARD_SIZE), Vector3(float(i), 0.0, float(Pathfinder.BOARD_SIZE)))
-		_add_exit_tile(Vector2i(-1, i), Vector3(-1.0, 0.0, float(i)))
-		_add_exit_tile(Vector2i(Pathfinder.BOARD_SIZE, i), Vector3(float(Pathfinder.BOARD_SIZE), 0.0, float(i)))
+		_add_exit_tile(Vector2i(i, -1), _grid_to_world(Vector2i(i, -1), 0.0))
+		_add_exit_tile(Vector2i(i, Pathfinder.BOARD_SIZE), _grid_to_world(Vector2i(i, Pathfinder.BOARD_SIZE), 0.0))
+		_add_exit_tile(Vector2i(-1, i), _grid_to_world(Vector2i(-1, i), 0.0))
+		_add_exit_tile(Vector2i(Pathfinder.BOARD_SIZE, i), _grid_to_world(Vector2i(Pathfinder.BOARD_SIZE, i), 0.0))
 
 func _add_exit_tile(gpos: Vector2i, world_pos: Vector3) -> void:
 	var side := TILE_SIZE - TILE_GAP
@@ -403,6 +408,233 @@ func _update_exit_tiles(highlighted: Array) -> void:
 		else:
 			mat.albedo_color = Color(0.04, 0.70, 0.48, 0.0)
 			mat.emission_enabled = false
+
+func _rebuild_map_dressing() -> void:
+	if _map_dressing_root != null:
+		_map_dressing_root.queue_free()
+	_map_dressing_root = Node3D.new()
+	_map_dressing_root.name = "MapDressing"
+	add_child(_map_dressing_root)
+
+	var map_tile := MAP_TILE_DATA.get_tile(_active_map_tile_id)
+	for wall in MAP_TILE_DATA.get_perimeter_walls(map_tile):
+		_add_wall_segment(wall.get("cell"), String(wall.get("dir", "")))
+	for exit in MAP_TILE_DATA.get_exits(_active_map_tile_id):
+		_add_exit_dressing(exit.get("cell"), String(exit.get("dir", "")))
+	for obstacle in MAP_TILE_DATA.get_obstacles(_active_map_tile_id):
+		_add_obstacle_dressing(obstacle)
+	for torch in MAP_TILE_DATA.get_torches(_active_map_tile_id):
+		_add_torch_dressing(torch.get("cell"), String(torch.get("dir", "")))
+
+func _add_wall_segment(cell: Vector2i, dir: String) -> void:
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	var thickness := 0.18
+	match dir:
+		MAP_TILE_DATA.DIR_NORTH, MAP_TILE_DATA.DIR_SOUTH:
+			box.size = Vector3(0.96, WALL_H, thickness)
+		MAP_TILE_DATA.DIR_EAST, MAP_TILE_DATA.DIR_WEST:
+			box.size = Vector3(thickness, WALL_H, 0.96)
+		_:
+			return
+	mi.mesh = box
+	mi.position = _edge_world_position(cell, dir, WALL_H * 0.5)
+	mi.material_override = _stone_wall_material()
+	_map_dressing_root.add_child(mi)
+
+func _add_exit_dressing(cell: Vector2i, dir: String) -> void:
+	var pad := MeshInstance3D.new()
+	var pad_mesh := BoxMesh.new()
+	pad_mesh.size = Vector3(0.78, 0.045, 0.78)
+	pad.mesh = pad_mesh
+	pad.position = _exit_pad_world_position(cell, dir)
+	pad.material_override = _exit_material()
+	_map_dressing_root.add_child(pad)
+
+	var left := MeshInstance3D.new()
+	var right := MeshInstance3D.new()
+	var post_mesh := BoxMesh.new()
+	post_mesh.size = Vector3(0.16, 0.62, 0.16)
+	left.mesh = post_mesh
+	right.mesh = post_mesh
+	left.material_override = _stone_wall_material()
+	right.material_override = _stone_wall_material()
+	var offsets := _exit_post_offsets(dir)
+	var base := _edge_world_position(cell, dir, 0.31)
+	left.position = base + offsets[0]
+	right.position = base + offsets[1]
+	_map_dressing_root.add_child(left)
+	_map_dressing_root.add_child(right)
+
+func _add_obstacle_dressing(cell: Vector2i) -> void:
+	var base := MeshInstance3D.new()
+	var base_mesh := BoxMesh.new()
+	base_mesh.size = Vector3(0.70, 0.18, 0.70)
+	base.mesh = base_mesh
+	base.position = _grid_to_world(cell, TILE_H + 0.09)
+	base.rotation_degrees.y = float((cell.x * 41 + cell.y * 23) % 25 - 12)
+	base.material_override = _rubble_material()
+	_map_dressing_root.add_child(base)
+
+	var shard := MeshInstance3D.new()
+	var shard_mesh := BoxMesh.new()
+	shard_mesh.size = Vector3(0.54, 0.16, 0.18)
+	shard.mesh = shard_mesh
+	shard.position = _grid_to_world(cell, TILE_H + 0.26) + Vector3(0.07, 0.0, -0.05)
+	shard.rotation_degrees = Vector3(0.0, float((cell.x * 29 + cell.y * 17) % 180), 12.0)
+	shard.material_override = _rubble_material()
+	_map_dressing_root.add_child(shard)
+
+func _add_torch_dressing(cell: Vector2i, dir: String) -> void:
+	var root := Node3D.new()
+	root.name = "Torch_%d_%d_%s" % [cell.x, cell.y, dir]
+	root.position = _edge_world_position(cell, dir, 0.58)
+	root.rotation_degrees.y = _wall_yaw_degrees(dir)
+	_map_dressing_root.add_child(root)
+
+	var bracket := MeshInstance3D.new()
+	var bracket_mesh := CylinderMesh.new()
+	bracket_mesh.top_radius = 0.035
+	bracket_mesh.bottom_radius = 0.035
+	bracket_mesh.height = 0.34
+	bracket.mesh = bracket_mesh
+	bracket.rotation_degrees.x = 90.0
+	bracket.position = Vector3(0.0, 0.0, 0.13)
+	bracket.material_override = _torch_bracket_material()
+	root.add_child(bracket)
+
+	var cup := MeshInstance3D.new()
+	var cup_mesh := CylinderMesh.new()
+	cup_mesh.top_radius = 0.09
+	cup_mesh.bottom_radius = 0.055
+	cup_mesh.height = 0.13
+	cup.mesh = cup_mesh
+	cup.position = Vector3(0.0, 0.0, 0.31)
+	cup.material_override = _torch_bracket_material()
+	root.add_child(cup)
+
+	var flame := MeshInstance3D.new()
+	var flame_mesh := SphereMesh.new()
+	flame_mesh.radius = 0.12
+	flame_mesh.height = 0.28
+	flame.mesh = flame_mesh
+	flame.position = Vector3(0.0, 0.13, 0.32)
+	flame.scale = Vector3(0.72, 1.18, 0.72)
+	flame.material_override = _flame_material()
+	root.add_child(flame)
+
+	var light := OmniLight3D.new()
+	light.position = Vector3(0.0, 0.16, 0.24)
+	light.light_color = Color(1.0, 0.52, 0.18)
+	light.light_energy = 3.2
+	light.omni_range = 3.2
+	light.shadow_enabled = false
+	root.add_child(light)
+	_start_torch_flicker(light, flame)
+
+func _start_torch_flicker(light: OmniLight3D, flame: MeshInstance3D) -> void:
+	var tween := create_tween()
+	tween.set_loops()
+	tween.set_trans(Tween.TRANS_SINE)
+	tween.set_ease(Tween.EASE_IN_OUT)
+	tween.tween_property(light, "light_energy", 2.35, 0.12)
+	tween.parallel().tween_property(flame, "scale", Vector3(0.62, 0.98, 0.62), 0.12)
+	tween.tween_property(light, "light_energy", 3.85, 0.18)
+	tween.parallel().tween_property(flame, "scale", Vector3(0.78, 1.30, 0.78), 0.18)
+	tween.tween_property(light, "light_energy", 2.85, 0.10)
+	tween.parallel().tween_property(flame, "scale", Vector3(0.70, 1.08, 0.70), 0.10)
+	tween.tween_property(light, "light_energy", 3.35, 0.16)
+	tween.parallel().tween_property(flame, "scale", Vector3(0.74, 1.20, 0.74), 0.16)
+
+func _edge_world_position(cell: Vector2i, dir: String, y: float) -> Vector3:
+	var center := _grid_to_world(cell, y)
+	match dir:
+		MAP_TILE_DATA.DIR_NORTH:
+			return center + Vector3(0.0, 0.0, -0.5)
+		MAP_TILE_DATA.DIR_EAST:
+			return center + Vector3(0.5, 0.0, 0.0)
+		MAP_TILE_DATA.DIR_SOUTH:
+			return center + Vector3(0.0, 0.0, 0.5)
+		MAP_TILE_DATA.DIR_WEST:
+			return center + Vector3(-0.5, 0.0, 0.0)
+	return center
+
+func _exit_pad_world_position(cell: Vector2i, dir: String) -> Vector3:
+	var center := _grid_to_world(cell, TILE_H + 0.035)
+	match dir:
+		MAP_TILE_DATA.DIR_NORTH:
+			return center + Vector3(0.0, 0.0, -0.86)
+		MAP_TILE_DATA.DIR_EAST:
+			return center + Vector3(0.86, 0.0, 0.0)
+		MAP_TILE_DATA.DIR_SOUTH:
+			return center + Vector3(0.0, 0.0, 0.86)
+		MAP_TILE_DATA.DIR_WEST:
+			return center + Vector3(-0.86, 0.0, 0.0)
+	return center
+
+func _grid_to_world(pos: Vector2i, y: float) -> Vector3:
+	return Vector3(float(pos.x) * TILE_SIZE, y, float(Pathfinder.BOARD_SIZE - 1 - pos.y) * TILE_SIZE)
+
+func _world_to_grid(pos: Vector3) -> Vector2i:
+	return Vector2i(roundi(pos.x / TILE_SIZE), Pathfinder.BOARD_SIZE - 1 - roundi(pos.z / TILE_SIZE))
+
+func _exit_post_offsets(dir: String) -> Array:
+	match dir:
+		MAP_TILE_DATA.DIR_NORTH, MAP_TILE_DATA.DIR_SOUTH:
+			return [Vector3(-0.40, 0.0, 0.0), Vector3(0.40, 0.0, 0.0)]
+		MAP_TILE_DATA.DIR_EAST, MAP_TILE_DATA.DIR_WEST:
+			return [Vector3(0.0, 0.0, -0.40), Vector3(0.0, 0.0, 0.40)]
+	return [Vector3.ZERO, Vector3.ZERO]
+
+func _wall_yaw_degrees(dir: String) -> float:
+	match dir:
+		MAP_TILE_DATA.DIR_NORTH:
+			return 180.0
+		MAP_TILE_DATA.DIR_EAST:
+			return -90.0
+		MAP_TILE_DATA.DIR_SOUTH:
+			return 0.0
+		MAP_TILE_DATA.DIR_WEST:
+			return 90.0
+	return 0.0
+
+func _stone_wall_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.34, 0.35, 0.34)
+	mat.roughness = 0.92
+	return mat
+
+func _rubble_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.37, 0.32, 0.25)
+	mat.roughness = 0.88
+	return mat
+
+func _exit_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.58, 0.46, 0.22, 0.72)
+	mat.emission_enabled = true
+	mat.emission = Color(0.22, 0.16, 0.06)
+	mat.emission_energy_multiplier = 0.35
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.roughness = 0.8
+	return mat
+
+func _torch_bracket_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.08, 0.07, 0.06)
+	mat.metallic = 0.7
+	mat.roughness = 0.35
+	return mat
+
+func _flame_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.46, 0.08)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.36, 0.04)
+	mat.emission_energy_multiplier = 4.5
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	return mat
 
 func _build_units() -> void:
 	_player_mis.clear()
@@ -453,7 +685,7 @@ func _build_camera() -> void:
 	_cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	_cam.size       = ZOOM_MIN
 	_cam.current    = true
-	_cam.position   = Vector3(2.0, 5.8, 9.0)
+	_cam.position   = Vector3(5.5, 5.8, 8.06)
 	add_child(_cam)
 	_cam.look_at(Vector3(2.0, 0.0, 2.0), Vector3.UP)
 
@@ -475,7 +707,7 @@ func _enemy_grid_pos(enemy_idx: int) -> Vector2i:
 		return Vector2i(-1, -1)
 	var enemy_mi: MeshInstance3D = _enemy_mis[enemy_idx] as MeshInstance3D
 	var pos: Vector3 = enemy_mi.position
-	return Vector2i(roundi(pos.x), roundi(pos.z))
+	return _world_to_grid(pos)
 
 func _start_enemy_target_pulse(enemy_idx: int) -> void:
 	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size() or _enemy_target_tweens.has(enemy_idx):

@@ -27,6 +27,10 @@ const MAP_TILE_1 := {
 		{ "cell": Vector2i(4, 3), "dir": DIR_EAST },
 		{ "cell": Vector2i(4, 4), "dir": DIR_EAST },
 	],
+	"torches": [
+		{ "cell": Vector2i(0, 0), "dir": DIR_WEST },
+		{ "cell": Vector2i(0, 4), "dir": DIR_WEST },
+	],
 	"walls": [],
 }
 
@@ -61,6 +65,9 @@ static func get_obstacles(tile_id: String = DEFAULT_TILE_ID) -> Array:
 
 static func get_exits(tile_id: String = DEFAULT_TILE_ID) -> Array:
 	return get_tile(tile_id).get("exits", [])
+
+static func get_torches(tile_id: String = DEFAULT_TILE_ID) -> Array:
+	return get_tile(tile_id).get("torches", [])
 
 static func get_tile_ids() -> Array:
 	return ALL_TILES.keys()
