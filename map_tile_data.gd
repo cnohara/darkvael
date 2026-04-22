@@ -31,6 +31,16 @@ const MAP_TILE_1 := {
 		{ "cell": Vector2i(0, 0), "dir": DIR_WEST },
 		{ "cell": Vector2i(0, 4), "dir": DIR_WEST },
 	],
+	"props": [
+		{
+			"asset": "res://assets/3d/crates_and_barrels.glb",
+			"node": "C16",
+			"cell": Vector2i(2, 2),
+			"rotation": 0.0,
+			"scale": 1.0,
+			"offset": Vector3(0.12, 0.0, 0.08),
+		},
+	],
 	"walls": [],
 }
 
@@ -68,6 +78,9 @@ static func get_exits(tile_id: String = DEFAULT_TILE_ID) -> Array:
 
 static func get_torches(tile_id: String = DEFAULT_TILE_ID) -> Array:
 	return get_tile(tile_id).get("torches", [])
+
+static func get_props(tile_id: String = DEFAULT_TILE_ID) -> Array:
+	return get_tile(tile_id).get("props", [])
 
 static func get_tile_ids() -> Array:
 	return ALL_TILES.keys()

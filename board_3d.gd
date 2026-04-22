@@ -421,26 +421,53 @@ func _rebuild_map_dressing() -> void:
 		_add_wall_segment(wall.get("cell"), String(wall.get("dir", "")))
 	for exit in MAP_TILE_DATA.get_exits(_active_map_tile_id):
 		_add_exit_dressing(exit.get("cell"), String(exit.get("dir", "")))
+	var prop_cells := []
+	for prop in MAP_TILE_DATA.get_props(_active_map_tile_id):
+		var prop_cell: Vector2i = prop.get("cell")
+		prop_cells.append(prop_cell)
+		_add_prop_dressing(prop)
 	for obstacle in MAP_TILE_DATA.get_obstacles(_active_map_tile_id):
-		_add_obstacle_dressing(obstacle)
+		if not prop_cells.has(obstacle):
+			_add_obstacle_dressing(obstacle)
 	for torch in MAP_TILE_DATA.get_torches(_active_map_tile_id):
 		_add_torch_dressing(torch.get("cell"), String(torch.get("dir", "")))
 
 func _add_wall_segment(cell: Vector2i, dir: String) -> void:
-	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	var thickness := 0.18
-	match dir:
-		MAP_TILE_DATA.DIR_NORTH, MAP_TILE_DATA.DIR_SOUTH:
-			box.size = Vector3(0.96, WALL_H, thickness)
-		MAP_TILE_DATA.DIR_EAST, MAP_TILE_DATA.DIR_WEST:
-			box.size = Vector3(thickness, WALL_H, 0.96)
-		_:
-			return
-	mi.mesh = box
-	mi.position = _edge_world_position(cell, dir, WALL_H * 0.5)
-	mi.material_override = _stone_wall_material()
-	_map_dressing_root.add_child(mi)
+	if dir.is_empty():
+		return
+	var wall_root := Node3D.new()
+	wall_root.name = "StoneWall_%d_%d_%s" % [cell.x, cell.y, dir]
+	wall_root.position = _edge_world_position(cell, dir, 0.0)
+	wall_root.rotation_degrees.y = _wall_yaw_degrees(dir)
+	_map_dressing_root.add_child(wall_root)
+
+	var rows := 3
+	var row_h := WALL_H / float(rows)
+	for row in range(rows):
+		var blocks := 4 if row != 1 else 5
+		var block_w := 0.92 / float(blocks)
+		for col in range(blocks):
+			var mi := MeshInstance3D.new()
+			var box := BoxMesh.new()
+			var w_variation := 0.88 + 0.06 * float((cell.x * 7 + cell.y * 11 + row * 5 + col * 3) % 3)
+			var h_variation := 0.88 + 0.04 * float((cell.x * 5 + cell.y * 13 + row + col) % 4)
+			var d_variation := 0.16 + 0.025 * float((cell.x * 3 + cell.y * 17 + row * 7 + col) % 3)
+			box.size = Vector3(block_w * w_variation, row_h * h_variation, d_variation)
+			mi.mesh = box
+			var x := -0.46 + block_w * (float(col) + 0.5)
+			var y := row_h * (float(row) + 0.5)
+			var z := 0.015 * float(((cell.x + cell.y + row + col) % 3) - 1)
+			mi.position = Vector3(x, y, z)
+			mi.material_override = _stone_wall_material(float(row), float(col), cell)
+			wall_root.add_child(mi)
+
+	var cap := MeshInstance3D.new()
+	var cap_mesh := BoxMesh.new()
+	cap_mesh.size = Vector3(0.98, 0.055, 0.22)
+	cap.mesh = cap_mesh
+	cap.position = Vector3(0.0, WALL_H + 0.025, 0.0)
+	cap.material_override = _stone_wall_material(4.0, 0.0, cell)
+	wall_root.add_child(cap)
 
 func _add_exit_dressing(cell: Vector2i, dir: String) -> void:
 	var pad := MeshInstance3D.new()
@@ -484,6 +511,106 @@ func _add_obstacle_dressing(cell: Vector2i) -> void:
 	shard.rotation_degrees = Vector3(0.0, float((cell.x * 29 + cell.y * 17) % 180), 12.0)
 	shard.material_override = _rubble_material()
 	_map_dressing_root.add_child(shard)
+
+func _add_prop_dressing(prop: Dictionary) -> void:
+	var asset_path := String(prop.get("asset", ""))
+	var node_name := String(prop.get("node", ""))
+	var cell: Vector2i = prop.get("cell", Vector2i.ZERO)
+	var scene := load(asset_path) as PackedScene
+	if scene == null:
+		_add_obstacle_dressing(cell)
+		return
+	var source_root := scene.instantiate()
+	var source_node := source_root.find_child(node_name, true, false)
+	if source_node == null:
+		source_root.queue_free()
+		_add_obstacle_dressing(cell)
+		return
+	var instance := source_node.duplicate(Node.DUPLICATE_USE_INSTANTIATION)
+	source_root.queue_free()
+	if instance == null:
+		_add_obstacle_dressing(cell)
+		return
+	var prop_root := Node3D.new()
+	prop_root.name = "Prop_%s_%d_%d" % [node_name, cell.x, cell.y]
+	prop_root.position = _grid_to_world(cell, TILE_H)
+	prop_root.rotation_degrees.y = float(prop.get("rotation", 0.0))
+	_map_dressing_root.add_child(prop_root)
+	prop_root.add_child(instance)
+
+	var bounds := _normalize_prop_instance(prop_root, instance)
+	var max_footprint: float = maxf(bounds.size.x, bounds.size.z)
+	if max_footprint > 0.001:
+		var fit_scale := 0.78 / max_footprint
+		var prop_scale := float(prop.get("scale", 1.0))
+		prop_root.scale = Vector3.ONE * fit_scale * prop_scale
+	_center_prop_root_on_cell(prop_root, cell)
+	prop_root.position += prop.get("offset", Vector3.ZERO)
+
+func _normalize_prop_instance(prop_root: Node3D, instance: Node) -> AABB:
+	var bounds := _combined_local_aabb(prop_root)
+	if bounds.size == Vector3.ZERO:
+		return bounds
+	var center := bounds.get_center()
+	if instance is Node3D:
+		var instance_3d := instance as Node3D
+		instance_3d.position -= Vector3(center.x, bounds.position.y, center.z)
+	return bounds
+
+func _center_prop_root_on_cell(prop_root: Node3D, cell: Vector2i) -> void:
+	var bounds := _combined_global_aabb(prop_root)
+	if bounds.size == Vector3.ZERO:
+		return
+	var target := _grid_to_world(cell, TILE_H)
+	var center := bounds.get_center()
+	prop_root.position += Vector3(target.x - center.x, 0.0, target.z - center.z)
+
+func _combined_global_aabb(root: Node3D) -> AABB:
+	var has_bounds := false
+	var combined := AABB()
+	for child in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var global_aabb := _transform_aabb(mi.get_aabb(), mi.global_transform)
+		if has_bounds:
+			combined = combined.merge(global_aabb)
+		else:
+			combined = global_aabb
+			has_bounds = true
+	return combined if has_bounds else AABB()
+
+func _combined_local_aabb(root: Node3D) -> AABB:
+	var has_bounds := false
+	var combined := AABB()
+	for child in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var local_xform := root.global_transform.affine_inverse() * mi.global_transform
+		var local_aabb := _transform_aabb(mi.get_aabb(), local_xform)
+		if has_bounds:
+			combined = combined.merge(local_aabb)
+		else:
+			combined = local_aabb
+			has_bounds = true
+	return combined if has_bounds else AABB()
+
+func _transform_aabb(aabb: AABB, xform: Transform3D) -> AABB:
+	var points := [
+		aabb.position,
+		aabb.position + Vector3(aabb.size.x, 0.0, 0.0),
+		aabb.position + Vector3(0.0, aabb.size.y, 0.0),
+		aabb.position + Vector3(0.0, 0.0, aabb.size.z),
+		aabb.position + Vector3(aabb.size.x, aabb.size.y, 0.0),
+		aabb.position + Vector3(aabb.size.x, 0.0, aabb.size.z),
+		aabb.position + Vector3(0.0, aabb.size.y, aabb.size.z),
+		aabb.position + aabb.size,
+	]
+	var transformed := AABB(xform * points[0], Vector3.ZERO)
+	for i in range(1, points.size()):
+		transformed = transformed.expand(xform * points[i])
+	return transformed
 
 func _add_torch_dressing(cell: Vector2i, dir: String) -> void:
 	var root := Node3D.new()
@@ -598,9 +725,10 @@ func _wall_yaw_degrees(dir: String) -> float:
 			return 90.0
 	return 0.0
 
-func _stone_wall_material() -> StandardMaterial3D:
+func _stone_wall_material(row: float = 0.0, col: float = 0.0, cell: Vector2i = Vector2i.ZERO) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.34, 0.35, 0.34)
+	var shade := 0.28 + 0.035 * float((cell.x * 5 + cell.y * 7 + int(row) * 3 + int(col)) % 5)
+	mat.albedo_color = Color(shade, shade + 0.012, shade + 0.006)
 	mat.roughness = 0.92
 	return mat
 
