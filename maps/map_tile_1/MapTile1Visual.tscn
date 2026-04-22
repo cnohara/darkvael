@@ -6,7 +6,7 @@
 [ext_resource type="Script" uid="uid://4xds16txmqjk" path="res://map_light_source.gd" id="3_light"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
-shading_mode = 0
+shading_mode = 1
 albedo_texture = ExtResource("2_floor")
 roughness = 0.9
 

@@ -690,21 +690,40 @@ func _add_torch_dressing(cell: Vector2i, dir: String) -> void:
 	light.omni_range = 3.2
 	light.shadow_enabled = false
 	root.add_child(light)
-	_start_torch_flicker(light, flame)
+	_start_torch_flicker(light, flame, hash("%d:%d:%s" % [cell.x, cell.y, dir]))
 
-func _start_torch_flicker(light: OmniLight3D, flame: MeshInstance3D) -> void:
+func _start_torch_flicker(light: OmniLight3D, flame: MeshInstance3D, seed: int) -> void:
+	if not is_instance_valid(light) or not is_instance_valid(flame):
+		return
+
+	var cycle := int(light.get_meta("flicker_cycle", 0))
+	light.set_meta("flicker_cycle", cycle + 1)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed + cycle * 7919
+	var low_energy := rng.randf_range(2.25, 2.65)
+	var high_energy := rng.randf_range(3.45, 3.95)
+	var settle_energy := rng.randf_range(2.80, 3.20)
+	var glow_energy := rng.randf_range(3.10, 3.50)
+	var low_scale := Vector3(rng.randf_range(0.58, 0.66), rng.randf_range(0.92, 1.04), rng.randf_range(0.58, 0.66))
+	var high_scale := Vector3(rng.randf_range(0.76, 0.84), rng.randf_range(1.24, 1.40), rng.randf_range(0.76, 0.84))
+	var settle_scale := Vector3(rng.randf_range(0.68, 0.74), rng.randf_range(1.04, 1.16), rng.randf_range(0.68, 0.74))
+	var glow_scale := Vector3(rng.randf_range(0.72, 0.78), rng.randf_range(1.14, 1.26), rng.randf_range(0.72, 0.78))
+
 	var tween := create_tween()
-	tween.set_loops()
 	tween.set_trans(Tween.TRANS_SINE)
 	tween.set_ease(Tween.EASE_IN_OUT)
-	tween.tween_property(light, "light_energy", 2.35, 0.12)
-	tween.parallel().tween_property(flame, "scale", Vector3(0.62, 0.98, 0.62), 0.12)
-	tween.tween_property(light, "light_energy", 3.85, 0.18)
-	tween.parallel().tween_property(flame, "scale", Vector3(0.78, 1.30, 0.78), 0.18)
-	tween.tween_property(light, "light_energy", 2.85, 0.10)
-	tween.parallel().tween_property(flame, "scale", Vector3(0.70, 1.08, 0.70), 0.10)
-	tween.tween_property(light, "light_energy", 3.35, 0.16)
-	tween.parallel().tween_property(flame, "scale", Vector3(0.74, 1.20, 0.74), 0.16)
+	if cycle == 0:
+		tween.tween_interval(rng.randf_range(0.0, 0.45))
+	tween.tween_property(light, "light_energy", low_energy, rng.randf_range(0.20, 0.32))
+	tween.parallel().tween_property(flame, "scale", low_scale, rng.randf_range(0.20, 0.32))
+	tween.tween_property(light, "light_energy", high_energy, rng.randf_range(0.28, 0.44))
+	tween.parallel().tween_property(flame, "scale", high_scale, rng.randf_range(0.28, 0.44))
+	tween.tween_property(light, "light_energy", settle_energy, rng.randf_range(0.18, 0.30))
+	tween.parallel().tween_property(flame, "scale", settle_scale, rng.randf_range(0.18, 0.30))
+	tween.tween_property(light, "light_energy", glow_energy, rng.randf_range(0.30, 0.50))
+	tween.parallel().tween_property(flame, "scale", glow_scale, rng.randf_range(0.30, 0.50))
+	tween.tween_callback(_start_torch_flicker.bind(light, flame, seed))
 
 func _edge_world_position(cell: Vector2i, dir: String, y: float) -> Vector3:
 	var center := _grid_to_world(cell, y)
