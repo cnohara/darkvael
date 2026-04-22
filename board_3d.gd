@@ -673,15 +673,32 @@ func _add_torch_dressing(cell: Vector2i, dir: String) -> void:
 	cup.material_override = _torch_bracket_material()
 	root.add_child(cup)
 
-	var flame := MeshInstance3D.new()
-	var flame_mesh := SphereMesh.new()
-	flame_mesh.radius = 0.12
-	flame_mesh.height = 0.28
-	flame.mesh = flame_mesh
+	var flame := Node3D.new()
+	flame.name = "Flame"
 	flame.position = Vector3(0.0, 0.13, 0.32)
-	flame.scale = Vector3(0.72, 1.18, 0.72)
-	flame.material_override = _flame_material()
+	flame.scale = Vector3(1.0, 1.0, 1.0)
+	flame.set_meta("base_position", flame.position)
 	root.add_child(flame)
+
+	var outer_flame := MeshInstance3D.new()
+	var outer_mesh := CylinderMesh.new()
+	outer_mesh.top_radius = 0.015
+	outer_mesh.bottom_radius = 0.105
+	outer_mesh.height = 0.34
+	outer_flame.mesh = outer_mesh
+	outer_flame.position = Vector3(0.0, 0.03, 0.0)
+	outer_flame.material_override = _flame_material(Color(1.0, 0.32, 0.04, 0.68), Color(1.0, 0.24, 0.03), 3.4)
+	flame.add_child(outer_flame)
+
+	var inner_flame := MeshInstance3D.new()
+	var inner_mesh := CylinderMesh.new()
+	inner_mesh.top_radius = 0.006
+	inner_mesh.bottom_radius = 0.050
+	inner_mesh.height = 0.24
+	inner_flame.mesh = inner_mesh
+	inner_flame.position = Vector3(0.0, -0.012, 0.006)
+	inner_flame.material_override = _flame_material(Color(1.0, 0.86, 0.30, 0.86), Color(1.0, 0.74, 0.18), 5.2)
+	flame.add_child(inner_flame)
 
 	var light := OmniLight3D.new()
 	light.position = Vector3(0.0, 0.16, 0.24)
@@ -692,7 +709,7 @@ func _add_torch_dressing(cell: Vector2i, dir: String) -> void:
 	root.add_child(light)
 	_start_torch_flicker(light, flame, hash("%d:%d:%s" % [cell.x, cell.y, dir]))
 
-func _start_torch_flicker(light: OmniLight3D, flame: MeshInstance3D, seed: int) -> void:
+func _start_torch_flicker(light: OmniLight3D, flame: Node3D, seed: int) -> void:
 	if not is_instance_valid(light) or not is_instance_valid(flame):
 		return
 
@@ -705,10 +722,19 @@ func _start_torch_flicker(light: OmniLight3D, flame: MeshInstance3D, seed: int) 
 	var high_energy := rng.randf_range(3.45, 3.95)
 	var settle_energy := rng.randf_range(2.80, 3.20)
 	var glow_energy := rng.randf_range(3.10, 3.50)
-	var low_scale := Vector3(rng.randf_range(0.58, 0.66), rng.randf_range(0.92, 1.04), rng.randf_range(0.58, 0.66))
-	var high_scale := Vector3(rng.randf_range(0.76, 0.84), rng.randf_range(1.24, 1.40), rng.randf_range(0.76, 0.84))
-	var settle_scale := Vector3(rng.randf_range(0.68, 0.74), rng.randf_range(1.04, 1.16), rng.randf_range(0.68, 0.74))
-	var glow_scale := Vector3(rng.randf_range(0.72, 0.78), rng.randf_range(1.14, 1.26), rng.randf_range(0.72, 0.78))
+	var low_scale := Vector3(rng.randf_range(0.82, 0.92), rng.randf_range(0.88, 1.00), rng.randf_range(0.82, 0.92))
+	var high_scale := Vector3(rng.randf_range(0.94, 1.06), rng.randf_range(1.10, 1.26), rng.randf_range(0.94, 1.06))
+	var settle_scale := Vector3(rng.randf_range(0.86, 0.98), rng.randf_range(0.96, 1.10), rng.randf_range(0.86, 0.98))
+	var glow_scale := Vector3(rng.randf_range(0.90, 1.02), rng.randf_range(1.02, 1.18), rng.randf_range(0.90, 1.02))
+	var base_position: Vector3 = flame.get_meta("base_position", flame.position)
+	var low_pos := base_position + Vector3(rng.randf_range(-0.018, 0.018), rng.randf_range(-0.006, 0.008), rng.randf_range(-0.010, 0.010))
+	var high_pos := base_position + Vector3(rng.randf_range(-0.026, 0.026), rng.randf_range(0.004, 0.018), rng.randf_range(-0.014, 0.014))
+	var settle_pos := base_position + Vector3(rng.randf_range(-0.014, 0.014), rng.randf_range(-0.004, 0.010), rng.randf_range(-0.010, 0.010))
+	var glow_pos := base_position + Vector3(rng.randf_range(-0.020, 0.020), rng.randf_range(0.0, 0.014), rng.randf_range(-0.012, 0.012))
+	var low_rot := Vector3(rng.randf_range(-3.5, 3.5), rng.randf_range(-14.0, 14.0), rng.randf_range(-3.5, 3.5))
+	var high_rot := Vector3(rng.randf_range(-5.0, 5.0), rng.randf_range(-20.0, 20.0), rng.randf_range(-5.0, 5.0))
+	var settle_rot := Vector3(rng.randf_range(-3.0, 3.0), rng.randf_range(-12.0, 12.0), rng.randf_range(-3.0, 3.0))
+	var glow_rot := Vector3(rng.randf_range(-4.0, 4.0), rng.randf_range(-16.0, 16.0), rng.randf_range(-4.0, 4.0))
 
 	var tween := create_tween()
 	tween.set_trans(Tween.TRANS_SINE)
@@ -717,12 +743,20 @@ func _start_torch_flicker(light: OmniLight3D, flame: MeshInstance3D, seed: int) 
 		tween.tween_interval(rng.randf_range(0.0, 0.45))
 	tween.tween_property(light, "light_energy", low_energy, rng.randf_range(0.20, 0.32))
 	tween.parallel().tween_property(flame, "scale", low_scale, rng.randf_range(0.20, 0.32))
+	tween.parallel().tween_property(flame, "position", low_pos, rng.randf_range(0.20, 0.32))
+	tween.parallel().tween_property(flame, "rotation_degrees", low_rot, rng.randf_range(0.20, 0.32))
 	tween.tween_property(light, "light_energy", high_energy, rng.randf_range(0.28, 0.44))
 	tween.parallel().tween_property(flame, "scale", high_scale, rng.randf_range(0.28, 0.44))
+	tween.parallel().tween_property(flame, "position", high_pos, rng.randf_range(0.28, 0.44))
+	tween.parallel().tween_property(flame, "rotation_degrees", high_rot, rng.randf_range(0.28, 0.44))
 	tween.tween_property(light, "light_energy", settle_energy, rng.randf_range(0.18, 0.30))
 	tween.parallel().tween_property(flame, "scale", settle_scale, rng.randf_range(0.18, 0.30))
+	tween.parallel().tween_property(flame, "position", settle_pos, rng.randf_range(0.18, 0.30))
+	tween.parallel().tween_property(flame, "rotation_degrees", settle_rot, rng.randf_range(0.18, 0.30))
 	tween.tween_property(light, "light_energy", glow_energy, rng.randf_range(0.30, 0.50))
 	tween.parallel().tween_property(flame, "scale", glow_scale, rng.randf_range(0.30, 0.50))
+	tween.parallel().tween_property(flame, "position", glow_pos, rng.randf_range(0.30, 0.50))
+	tween.parallel().tween_property(flame, "rotation_degrees", glow_rot, rng.randf_range(0.30, 0.50))
 	tween.tween_callback(_start_torch_flicker.bind(light, flame, seed))
 
 func _edge_world_position(cell: Vector2i, dir: String, y: float) -> Vector3:
@@ -807,13 +841,14 @@ func _torch_bracket_material() -> StandardMaterial3D:
 	mat.roughness = 0.35
 	return mat
 
-func _flame_material() -> StandardMaterial3D:
+func _flame_material(albedo: Color, emission: Color, energy: float) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 0.46, 0.08)
+	mat.albedo_color = albedo
 	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.36, 0.04)
-	mat.emission_energy_multiplier = 4.5
+	mat.emission = emission
+	mat.emission_energy_multiplier = energy
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return mat
 
 func _build_units() -> void:
