@@ -55,7 +55,7 @@ func _build_ui() -> void:
 	outer.add_child(vbox)
 
 	_title_lbl = Label.new()
-	_title_lbl.add_theme_font_size_override("font_size", 26)
+	_title_lbl.add_theme_font_size_override("font_size", UITheme.font_size(26))
 	_title_lbl.add_theme_color_override("font_color", Color(1.0, 0.88, 0.30))
 	_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_title_lbl)
@@ -96,7 +96,7 @@ func _build_ui() -> void:
 func _build_step1(parent: Control) -> void:
 	var sub_lbl := Label.new()
 	sub_lbl.text = "Choose a level-up benefit:"
-	sub_lbl.add_theme_font_size_override("font_size", 20)
+	sub_lbl.add_theme_font_size_override("font_size", UITheme.font_size(20))
 	sub_lbl.add_theme_color_override("font_color", Color(0.78, 0.78, 0.88))
 	parent.add_child(sub_lbl)
 
@@ -124,14 +124,14 @@ func _build_step1(parent: Control) -> void:
 
 		var op_title := Label.new()
 		op_title.text = option_data[i][0]
-		op_title.add_theme_font_size_override("font_size", 20)
+		op_title.add_theme_font_size_override("font_size", UITheme.font_size(20))
 		op_title.add_theme_color_override("font_color", Color(0.95, 0.90, 0.75))
 		op_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		op_vbox.add_child(op_title)
 
 		var op_desc := Label.new()
 		op_desc.text = option_data[i][1]
-		op_desc.add_theme_font_size_override("font_size", 18)
+		op_desc.add_theme_font_size_override("font_size", UITheme.font_size(18))
 		op_desc.add_theme_color_override("font_color", Color(0.72, 0.78, 0.90))
 		op_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		op_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -141,7 +141,7 @@ func _build_step1(parent: Control) -> void:
 
 func _build_step2(parent: Control) -> void:
 	_card_count_lbl = Label.new()
-	_card_count_lbl.add_theme_font_size_override("font_size", 20)
+	_card_count_lbl.add_theme_font_size_override("font_size", UITheme.font_size(20))
 	_card_count_lbl.add_theme_color_override("font_color", Color(0.95, 0.82, 0.34))
 	parent.add_child(_card_count_lbl)
 
@@ -211,19 +211,19 @@ func _make_class_card_panel(card: CardData, idx: int) -> PanelContainer:
 
 	var name_lbl := Label.new()
 	name_lbl.text = card.card_name
-	name_lbl.add_theme_font_size_override("font_size", 17)
+	name_lbl.add_theme_font_size_override("font_size", UITheme.font_size(17))
 	name_lbl.add_theme_color_override("font_color", Color(0.92, 0.92, 0.95))
 	vbox.add_child(name_lbl)
 
 	var meta_lbl := Label.new()
 	meta_lbl.text = "Cost: %d  Init: %d" % [card.cost, card.initiative]
-	meta_lbl.add_theme_font_size_override("font_size", 14)
+	meta_lbl.add_theme_font_size_override("font_size", UITheme.font_size(14))
 	meta_lbl.add_theme_color_override("font_color", Color(0.82, 0.78, 0.42))
 	vbox.add_child(meta_lbl)
 
 	var fx_lbl := Label.new()
 	fx_lbl.text = card.effect_text
-	fx_lbl.add_theme_font_size_override("font_size", 14)
+	fx_lbl.add_theme_font_size_override("font_size", UITheme.font_size(14))
 	fx_lbl.add_theme_color_override("font_color", Color(0.74, 0.74, 0.82))
 	fx_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(fx_lbl)
@@ -280,5 +280,5 @@ func _style_btn(btn: Button, color: Color) -> void:
 	btn.add_theme_stylebox_override("normal", _flat_style(color, 5, 8))
 	btn.add_theme_stylebox_override("hover", _flat_style(color.lightened(0.14), 5, 8))
 	btn.add_theme_stylebox_override("pressed", _flat_style(color.darkened(0.12), 5, 8))
-	btn.add_theme_font_size_override("font_size", 18)
+	btn.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	btn.add_theme_color_override("font_color", Color.WHITE)

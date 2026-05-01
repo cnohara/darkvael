@@ -129,13 +129,13 @@ func _style_btn(btn: Button, color: Color) -> void:
 	btn.add_theme_stylebox_override("normal", _flat_style(color, 6, 8))
 	btn.add_theme_stylebox_override("hover", _flat_style(color.lightened(0.15), 6, 8))
 	btn.add_theme_stylebox_override("pressed", _flat_style(color.darkened(0.12), 6, 8))
-	btn.add_theme_font_size_override("font_size", 18)
+	btn.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	btn.add_theme_color_override("font_color", Color.WHITE)
 
 func _lbl(text: String, bold: bool = false, font_size: int = 16) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_font_size_override("font_size", UITheme.font_size(font_size))
 	if bold:
 		label.add_theme_color_override("font_color", Color(0.95, 0.90, 0.76))
 	return label

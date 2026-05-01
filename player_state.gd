@@ -13,7 +13,7 @@ var seat_index: int = 0
 var name: String = ""
 var hero_type: String = "Cleric"
 var level: int = 1
-var xp: int = 0
+var xp: float = 0.0
 var hp: int = BASE_MAX_HP
 var max_hp: int = BASE_MAX_HP
 var max_stamina: int = BASE_MAX_STAMINA
@@ -26,7 +26,14 @@ var discard_pile: Array = []
 var ready: bool = false
 var alive: bool = true
 
-var bless: bool = false
+var bless_cards: Array = []          # Array[BlessCardData], max 3
+var stamina_bonus: int = 0           # from Blessing of Vigor; cleared at round end
+var pending_bless_damage_bonus: int = 0  # from Blessing of Power; consumed on first attack
+var pending_bless_ignore_block: bool = false  # from Blessing of Judgement I
+var pending_bless_ignore_block_all: bool = false  # from Blessing of Judgement II
+var pending_bless_reflect: bool = false       # from Blessing of Retribution
+var pending_bless_reflect_multiplier: int = 1
+
 var poison: bool = false
 var stun: bool = false
 var entangle: bool = false
@@ -46,7 +53,9 @@ func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i) -> void:
 	hp = max_hp
 	block = 0
 	_clear_conditions()
-	bless = false
+	bless_cards.clear()
+	_clear_pending_bless()
+	stamina_bonus = 0
 	damage_immune = false
 	pos = spawn_pos
 	draw_pile = CardData.create_hero_deck(hero_type)
@@ -78,12 +87,15 @@ func initiative() -> int:
 		return 99
 	return (selected[0] as CardData).initiative
 
+func effective_stamina() -> int:
+	return max_stamina + stamina_bonus
+
 func can_select(card: CardData) -> bool:
 	if not alive or ready:
 		return false
 	if selected.size() >= selection_limit():
 		return false
-	if selected_stamina() + card.cost > max_stamina:
+	if selected_stamina() + card.cost > effective_stamina():
 		return false
 	return true
 
@@ -130,6 +142,8 @@ func reorder_selected(selected_index: int, direction: int) -> bool:
 
 func end_round_cleanup() -> void:
 	block = 0
+	stamina_bonus = 0
+	_clear_pending_bless()
 	for card in selected:
 		var c: CardData = card as CardData
 		if CardData.is_rotate_card(c):
@@ -157,11 +171,18 @@ func _clear_conditions() -> void:
 	confused = false
 	burn = 0
 
+func _clear_pending_bless() -> void:
+	pending_bless_damage_bonus = 0
+	pending_bless_ignore_block = false
+	pending_bless_ignore_block_all = false
+	pending_bless_reflect = false
+	pending_bless_reflect_multiplier = 1
+
 func apply_damage(amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
 	if damage_immune:
 		return 0
 	var remaining := amount
-	if not ignore_block:
+	if attack_type != "magic" and not ignore_block:
 		var absorbed := mini(block, remaining)
 		block -= absorbed
 		remaining -= absorbed
@@ -210,7 +231,9 @@ func apply_level_up(option: int) -> void:
 
 func restore_for_level_up() -> void:
 	_clear_conditions()
-	bless = false
+	bless_cards.clear()
+	_clear_pending_bless()
+	stamina_bonus = 0
 	damage_immune = false
 	hp = max_hp
 
@@ -232,8 +255,8 @@ func condition_list() -> String:
 
 func status_text() -> String:
 	var parts: Array[String] = []
-	if bless:
-		parts.append("Bless")
+	if bless_cards.size() > 0:
+		parts.append("Bless×%d" % bless_cards.size())
 	if poison:
 		parts.append("Poison")
 	if stun:
@@ -270,7 +293,13 @@ func to_dict() -> Dictionary:
 		"discard_pile": _cards_to_names(discard_pile),
 		"ready": ready,
 		"alive": alive,
-		"bless": bless,
+		"bless_cards": _bless_cards_to_dicts(),
+		"stamina_bonus": stamina_bonus,
+		"pending_bless_damage_bonus": pending_bless_damage_bonus,
+		"pending_bless_ignore_block": pending_bless_ignore_block,
+		"pending_bless_ignore_block_all": pending_bless_ignore_block_all,
+		"pending_bless_reflect": pending_bless_reflect,
+		"pending_bless_reflect_multiplier": pending_bless_reflect_multiplier,
 		"poison": poison,
 		"stun": stun,
 		"entangle": entangle,
@@ -285,7 +314,7 @@ func load_from_dict(data: Dictionary) -> void:
 	name = String(data.get("name", name))
 	hero_type = String(data.get("hero_type", hero_type))
 	level = int(data.get("level", level))
-	xp = int(data.get("xp", xp))
+	xp = float(data.get("xp", xp))
 	hp = int(data.get("hp", hp))
 	max_hp = int(data.get("max_hp", max_hp))
 	max_stamina = int(data.get("max_stamina", max_stamina))
@@ -298,7 +327,13 @@ func load_from_dict(data: Dictionary) -> void:
 	discard_pile = _names_to_cards(data.get("discard_pile", []))
 	ready = bool(data.get("ready", ready))
 	alive = bool(data.get("alive", alive))
-	bless = bool(data.get("bless", bless))
+	bless_cards = _dicts_to_bless_cards(data.get("bless_cards", []))
+	stamina_bonus = int(data.get("stamina_bonus", 0))
+	pending_bless_damage_bonus = int(data.get("pending_bless_damage_bonus", 0))
+	pending_bless_ignore_block = bool(data.get("pending_bless_ignore_block", false))
+	pending_bless_ignore_block_all = bool(data.get("pending_bless_ignore_block_all", false))
+	pending_bless_reflect = bool(data.get("pending_bless_reflect", false))
+	pending_bless_reflect_multiplier = int(data.get("pending_bless_reflect_multiplier", 1))
 	poison = bool(data.get("poison", poison))
 	stun = bool(data.get("stun", stun))
 	entangle = bool(data.get("entangle", entangle))
@@ -321,3 +356,17 @@ func _names_to_cards(names: Array) -> Array:
 		if card != null:
 			cards.append(card)
 	return cards
+
+func _bless_cards_to_dicts() -> Array:
+	var result: Array = []
+	for bc in bless_cards:
+		result.append((bc as BlessCardData).to_dict())
+	return result
+
+func _dicts_to_bless_cards(dicts: Array) -> Array:
+	var result: Array = []
+	for d in dicts:
+		var bc := BlessCardData.from_dict(d)
+		if bc != null:
+			result.append(bc)
+	return result

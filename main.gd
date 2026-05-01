@@ -1,7 +1,7 @@
 extends Node
 
 const MIN_WINDOW_SIZE := Vector2i(1280, 800)
-const DEFAULT_UI_FONT_SIZE := 18
+const DEFAULT_UI_FONT_SIZE := UITheme.BASE_SIZE
 
 var current_scene: Node = null
 var session_manager = null

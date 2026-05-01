@@ -31,7 +31,7 @@ func _build_ui() -> void:
 
 	var title_lbl := Label.new()
 	title_lbl.text = "DarkVael Prototype"
-	title_lbl.add_theme_font_size_override("font_size", 56)
+	title_lbl.add_theme_font_size_override("font_size", UITheme.font_size(56))
 	title_lbl.add_theme_color_override("font_color", Color(0.85, 0.72, 0.28))
 	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title_lbl)
@@ -40,7 +40,7 @@ func _build_ui() -> void:
 
 	var sub_lbl := Label.new()
 	sub_lbl.text = "Single Battle Prototype"
-	sub_lbl.add_theme_font_size_override("font_size", 24)
+	sub_lbl.add_theme_font_size_override("font_size", UITheme.font_size(24))
 	sub_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.65))
 	sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(sub_lbl)
@@ -49,7 +49,7 @@ func _build_ui() -> void:
 
 	var hint_lbl := Label.new()
 	hint_lbl.text = "Each player selects cards from their own hand, marks Ready, then acts in initiative order."
-	hint_lbl.add_theme_font_size_override("font_size", 18)
+	hint_lbl.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	hint_lbl.add_theme_color_override("font_color", Color(0.5, 0.55, 0.6))
 	hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -76,7 +76,7 @@ func _build_ui() -> void:
 
 	var count_lbl := Label.new()
 	count_lbl.text = "Choose player count"
-	count_lbl.add_theme_font_size_override("font_size", 18)
+	count_lbl.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	count_lbl.add_theme_color_override("font_color", Color(0.80, 0.82, 0.90))
 	count_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_player_count_box.add_child(count_lbl)
@@ -88,7 +88,7 @@ func _build_ui() -> void:
 	for player_count in [2, 3, 4]:
 		var count_btn := _make_btn("%d Players" % player_count, Color(0.22, 0.36, 0.62))
 		count_btn.custom_minimum_size = Vector2(160, 50)
-		count_btn.add_theme_font_size_override("font_size", 18)
+		count_btn.add_theme_font_size_override("font_size", UITheme.font_size(18))
 		count_btn.pressed.connect(start_battle.emit.bind(player_count))
 		counts.add_child(count_btn)
 
@@ -111,7 +111,7 @@ func _build_ui() -> void:
 
 	var host_go_btn := _make_btn("Create Room Code", Color(0.52, 0.26, 0.20))
 	host_go_btn.custom_minimum_size = Vector2(240, 48)
-	host_go_btn.add_theme_font_size_override("font_size", 18)
+	host_go_btn.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	host_go_btn.pressed.connect(func() -> void:
 		host_online_requested.emit(_server_url_edit.text)
 	)
@@ -144,7 +144,7 @@ func _build_ui() -> void:
 
 	var join_go_btn := _make_btn("Join By Code", Color(0.22, 0.40, 0.62))
 	join_go_btn.custom_minimum_size = Vector2(240, 48)
-	join_go_btn.add_theme_font_size_override("font_size", 18)
+	join_go_btn.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	join_go_btn.pressed.connect(func() -> void:
 		join_online_requested.emit(join_server_edit.text, _join_code_edit.text)
 	)
@@ -178,7 +178,7 @@ func _make_btn(label: String, color: Color) -> Button:
 	var hover := style.duplicate() as StyleBoxFlat
 	hover.bg_color = color.lightened(0.15)
 	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_font_size_override("font_size", 18)
+	btn.add_theme_font_size_override("font_size", UITheme.font_size(18))
 	btn.add_theme_color_override("font_color", Color.WHITE)
 	return btn
 

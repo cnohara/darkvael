@@ -21,6 +21,10 @@ var enemies: Array = []
 var selected_planning_player_index: int = 0
 var active_map_tile_id: String = MAP_TILE_DATA.DEFAULT_TILE_ID
 
+var bless_draw: Array = []    # BlessCardData not yet in market
+var bless_discard: Array = [] # Side II cards played (removed permanently)
+var bless_market: Array = [null, null, null]  # 3 face-up slots
+
 var current_phase: Phase = Phase.TITLE
 var round_number: int = 0
 var combat_log: Array = []
@@ -28,16 +32,16 @@ var combat_log: Array = []
 static func enemy_base_stats(enemy_type: String) -> Dictionary:
 	match enemy_type:
 		"UndeadSoldier":
-			return {"max_hp": 6, "physical_armor": 2, "magic_armor": 0, "xp_reward": 1}
+			return {"max_hp": 6, "xp_reward": 1}
 		"UndeadArcher":
-			return {"max_hp": 5, "physical_armor": 1, "magic_armor": 0, "xp_reward": 1}
+			return {"max_hp": 5, "xp_reward": 1}
 		"BlackKnight":
-			return {"max_hp": 12, "physical_armor": 5, "magic_armor": 0, "xp_reward": 2}
+			return {"max_hp": 12, "xp_reward": 2}
 		"Nashrat":
-			return {"max_hp": 3, "physical_armor": 0, "magic_armor": 0, "xp_reward": 1}
+			return {"max_hp": 3, "xp_reward": 0.5}
 		"AshenSkeleton":
-			return {"max_hp": 5, "physical_armor": 2, "magic_armor": 0, "xp_reward": 2}
-	return {"max_hp": 6, "physical_armor": 0, "magic_armor": 0, "xp_reward": 1}
+			return {"max_hp": 5, "xp_reward": 0.5}
+	return {"max_hp": 6, "xp_reward": 1}
 
 func setup(p_player_count: int) -> void:
 	player_count = clampi(p_player_count, 1, MAX_PLAYERS)
@@ -64,8 +68,6 @@ func setup(p_player_count: int) -> void:
 		var stats := enemy_base_stats(et)
 		enemy.max_hp = stats["max_hp"]
 		enemy.hp = enemy.max_hp
-		enemy.physical_armor = stats["physical_armor"]
-		enemy.magic_armor = stats["magic_armor"]
 		enemy.xp_reward = stats["xp_reward"]
 		enemy.block = 0
 		enemy.pos = _pick_enemy_spawn(occupied, 3)
@@ -81,6 +83,7 @@ func setup(p_player_count: int) -> void:
 	selected_planning_player_index = 0
 	current_phase = Phase.SETUP
 	combat_log.clear()
+	_init_bless_deck()
 
 func _player_spawn_positions(count: int) -> Array:
 	var preferred: Array = []
@@ -154,8 +157,6 @@ func setup_new_encounter() -> void:
 		var stats := enemy_base_stats(et)
 		enemy.max_hp = stats["max_hp"]
 		enemy.hp = enemy.max_hp
-		enemy.physical_armor = stats["physical_armor"]
-		enemy.magic_armor = stats["magic_armor"]
 		enemy.xp_reward = stats["xp_reward"]
 		enemy.block = 0
 		enemy.pos = _pick_enemy_spawn(occupied, 3)
@@ -206,6 +207,7 @@ func start_next_round() -> void:
 	log_msg("=== Round %d ===" % round_number)
 	current_phase = Phase.SELECT
 	selected_planning_player_index = first_editable_player_index()
+	_refill_bless_market()
 
 func reveal_enemy_behaviors() -> void:
 	for enemy in enemies:
@@ -353,6 +355,8 @@ func set_player_ready(player_id: int, ready: bool) -> bool:
 	var player = get_player(player_id)
 	if player == null or not player.alive:
 		return false
+	if ready and player.selected.is_empty():
+		return false
 	if ready and player.selected.size() > player.selection_limit():
 		return false
 	player.ready = ready
@@ -390,6 +394,80 @@ func apply_damage_enemy(enemy: EnemyState, amount: int, attack_type: String = "p
 		return 0
 	return enemy.apply_damage(amount, attack_type, ignore_block)
 
+func _init_bless_deck() -> void:
+	bless_draw = BlessCardData.create_deck()
+	bless_draw.shuffle()
+	bless_discard.clear()
+	bless_market = [null, null, null]
+	_refill_bless_market()
+
+func _refill_bless_market() -> void:
+	for i in range(3):
+		if bless_market[i] != null:
+			continue
+		if bless_draw.is_empty():
+			break
+		bless_market[i] = bless_draw.pop_front()
+
+func party_bless_count() -> int:
+	var total := 0
+	for player in players:
+		if (player as PlayerState).alive:
+			total += (player as PlayerState).bless_cards.size()
+	return total
+
+# Called when a card effect grants Bless to a player.
+# Pass preferred_slot >= 0 to take from that specific market slot; otherwise takes from slot 0→1→2.
+func grant_bless_to(seat_index: int, preferred_slot: int = -1) -> bool:
+	var player := get_player(seat_index)
+	if player == null or not player.alive:
+		return false
+	if player.bless_cards.size() >= 3:
+		return false
+	if preferred_slot >= 0 and preferred_slot < bless_market.size() and bless_market[preferred_slot] != null:
+		var card: BlessCardData = bless_market[preferred_slot] as BlessCardData
+		player.bless_cards.append(card)
+		bless_market[preferred_slot] = null
+		return true
+	for i in range(3):
+		if bless_market[i] != null:
+			var card: BlessCardData = bless_market[i] as BlessCardData
+			player.bless_cards.append(card)
+			bless_market[i] = null
+			return true
+	return false
+
+# Returns effect dict for the played card, or empty dict if invalid.
+# Side I cards flip to Side II and go back to the bottom of draw.
+# Side II cards are permanently removed (go to discard).
+func play_bless_card(seat_index: int, hand_slot: int) -> Dictionary:
+	var player := get_player(seat_index)
+	if player == null or hand_slot < 0 or hand_slot >= player.bless_cards.size():
+		return {}
+	var card: BlessCardData = player.bless_cards[hand_slot] as BlessCardData
+	player.bless_cards.remove_at(hand_slot)
+	if card.side == 1:
+		var flipped := BlessCardData.flipped(card)
+		if flipped != null:
+			bless_draw.append(flipped)
+	else:
+		bless_discard.append(card)
+	return card.effect.duplicate()
+
+# Used by Invoke Burden — upgrades a held Side I card to its Side II in-place.
+func upgrade_bless_card(seat_index: int, hand_slot: int) -> bool:
+	var player := get_player(seat_index)
+	if player == null or hand_slot < 0 or hand_slot >= player.bless_cards.size():
+		return false
+	var card: BlessCardData = player.bless_cards[hand_slot] as BlessCardData
+	if card.side != 1:
+		return false
+	var flipped := BlessCardData.flipped(card)
+	if flipped == null:
+		return false
+	player.bless_cards[hand_slot] = flipped
+	return true
+
 func log_msg(msg: String) -> void:
 	combat_log.append(msg)
 	if combat_log.size() > 30:
@@ -402,6 +480,12 @@ func to_dict() -> Dictionary:
 	var enemy_data: Array = []
 	for enemy in enemies:
 		enemy_data.append(enemy.to_dict())
+	var market_data: Array = []
+	for bc in bless_market:
+		market_data.append({} if bc == null else (bc as BlessCardData).to_dict())
+	var bless_draw_data: Array = []
+	for bc in bless_draw:
+		bless_draw_data.append((bc as BlessCardData).to_dict())
 	return {
 		"player_count": player_count,
 		"players": player_data,
@@ -411,6 +495,9 @@ func to_dict() -> Dictionary:
 		"current_phase": int(current_phase),
 		"round_number": round_number,
 		"combat_log": combat_log.duplicate(),
+		"bless_market": market_data,
+		"bless_draw": bless_draw_data,
+		"bless_discard_count": bless_discard.size(),
 	}
 
 func load_from_dict(data: Dictionary) -> void:
@@ -430,3 +517,14 @@ func load_from_dict(data: Dictionary) -> void:
 	current_phase = int(data.get("current_phase", int(current_phase)))
 	round_number = int(data.get("round_number", round_number))
 	combat_log = data.get("combat_log", []).duplicate()
+	bless_market = [null, null, null]
+	var market_raw: Array = data.get("bless_market", [])
+	for i in range(mini(market_raw.size(), 3)):
+		var d: Dictionary = market_raw[i]
+		if not d.is_empty():
+			bless_market[i] = BlessCardData.from_dict(d)
+	bless_draw.clear()
+	for d in data.get("bless_draw", []):
+		var bc := BlessCardData.from_dict(d)
+		if bc != null:
+			bless_draw.append(bc)

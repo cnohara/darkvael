@@ -5,9 +5,7 @@ var index: int = 0
 var enemy_type: String = "UndeadSoldier"
 var hp: int = 6
 var max_hp: int = 6
-var physical_armor: int = 0
-var magic_armor: int = 0
-var xp_reward: int = 1
+var xp_reward: float = 1.0
 var block: int = 0
 var pos: Vector2i = Vector2i(2, 0)
 var alive: bool = true
@@ -25,14 +23,10 @@ var burn: int = 0
 
 func apply_damage(amount: int, attack_type: String = "physical", ignore_block: bool = false) -> int:
 	var remaining := amount
-	if not ignore_block:
+	if attack_type != "magic" and not ignore_block:
 		var absorbed := mini(block, remaining)
 		block -= absorbed
 		remaining -= absorbed
-	if attack_type == "magic":
-		remaining = maxi(remaining - magic_armor, 0)
-	else:
-		remaining = maxi(remaining - physical_armor, 0)
 	hp = maxi(hp - remaining, 0)
 	alive = hp > 0
 	return remaining
@@ -96,8 +90,6 @@ func to_dict() -> Dictionary:
 		"enemy_type": enemy_type,
 		"hp": hp,
 		"max_hp": max_hp,
-		"physical_armor": physical_armor,
-		"magic_armor": magic_armor,
 		"xp_reward": xp_reward,
 		"block": block,
 		"pos": [pos.x, pos.y],
@@ -119,9 +111,7 @@ func load_from_dict(data: Dictionary) -> void:
 	enemy_type = String(data.get("enemy_type", enemy_type))
 	hp = int(data.get("hp", hp))
 	max_hp = int(data.get("max_hp", max_hp))
-	physical_armor = int(data.get("physical_armor", physical_armor))
-	magic_armor = int(data.get("magic_armor", magic_armor))
-	xp_reward = int(data.get("xp_reward", xp_reward))
+	xp_reward = float(data.get("xp_reward", xp_reward))
 	block = int(data.get("block", block))
 	var pos_arr: Array = data.get("pos", [pos.x, pos.y])
 	pos = Vector2i(int(pos_arr[0]), int(pos_arr[1]))

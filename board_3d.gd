@@ -91,6 +91,26 @@ func handle_camera_input(event: InputEvent) -> bool:
 			return true
 	return false
 
+func handle_board_click(screen_pos: Vector2, prefer_tile: bool = false) -> bool:
+	if prefer_tile:
+		var tile_pos := _screen_to_grid(screen_pos)
+		if _is_clickable_grid_pos(tile_pos):
+			tile_pressed.emit(tile_pos)
+			return true
+		return false
+
+	var enemy_idx := _screen_to_enemy_index(screen_pos)
+	if enemy_idx >= 0:
+		tile_pressed.emit(_enemy_grid_pos(enemy_idx))
+		enemy_pressed.emit(enemy_idx)
+		return true
+
+	var gpos := _screen_to_grid(screen_pos)
+	if _is_clickable_grid_pos(gpos):
+		tile_pressed.emit(gpos)
+		return true
+	return false
+
 func orbit_camera(delta: Vector2) -> void:
 	_cam_yaw -= delta.x * CAMERA_ROTATE_SPEED
 	_cam_pitch = clampf(_cam_pitch + delta.y * CAMERA_ROTATE_SPEED, deg_to_rad(24.0), deg_to_rad(72.0))
@@ -790,6 +810,47 @@ func _grid_to_world(pos: Vector2i, y: float) -> Vector3:
 
 func _world_to_grid(pos: Vector3) -> Vector2i:
 	return Vector2i(roundi(pos.x / TILE_SIZE), Pathfinder.BOARD_SIZE - 1 - roundi(pos.z / TILE_SIZE))
+
+func _screen_to_grid(screen_pos: Vector2) -> Vector2i:
+	if _cam == null:
+		return Vector2i(-99, -99)
+	var ray_origin := _cam.project_ray_origin(screen_pos)
+	var ray_normal := _cam.project_ray_normal(screen_pos)
+	if absf(ray_normal.y) < 0.0001:
+		return Vector2i(-99, -99)
+	var distance := -ray_origin.y / ray_normal.y
+	if distance < 0.0:
+		return Vector2i(-99, -99)
+	var world_pos := ray_origin + ray_normal * distance
+	return _world_to_grid(world_pos)
+
+func _is_clickable_grid_pos(gpos: Vector2i) -> bool:
+	return gpos.x >= -1 and gpos.x <= Pathfinder.BOARD_SIZE and gpos.y >= -1 and gpos.y <= Pathfinder.BOARD_SIZE
+
+func _screen_to_enemy_index(screen_pos: Vector2) -> int:
+	if _cam == null:
+		return -1
+	var ray_origin := _cam.project_ray_origin(screen_pos)
+	var ray_target := ray_origin + _cam.project_ray_normal(screen_pos) * 128.0
+	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_target)
+	query.collide_with_areas = true
+	query.collide_with_bodies = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return -1
+	var collider: Variant = hit.get("collider")
+	if not (collider is Node):
+		return -1
+	return _enemy_index_for_node(collider as Node)
+
+func _enemy_index_for_node(node: Node) -> int:
+	for i in range(_enemy_mis.size()):
+		var enemy_mi: MeshInstance3D = _enemy_mis[i]
+		if enemy_mi == null or not enemy_mi.visible:
+			continue
+		if node == enemy_mi or enemy_mi.is_ancestor_of(node):
+			return i
+	return -1
 
 func _exit_post_offsets(dir: String) -> Array:
 	match dir:

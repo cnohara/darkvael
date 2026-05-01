@@ -1,6 +1,11 @@
 class_name UITheme
 extends RefCounted
 
+const BASE_SIZE := 24
+
+static func font_size(n: int) -> int:
+	return roundi(n * BASE_SIZE / 15.0)
+
 static func create() -> Theme:
 	var font := SystemFont.new()
 	font.font_names = PackedStringArray([
@@ -19,11 +24,11 @@ static func create() -> Theme:
 
 	var theme := Theme.new()
 	theme.default_font = font
-	theme.default_font_size = 18
-	theme.set_font_size("font_size", "Label", 18)
-	theme.set_font_size("font_size", "Button", 18)
-	theme.set_font_size("font_size", "LineEdit", 18)
-	theme.set_font_size("font_size", "TextEdit", 18)
-	theme.set_font_size("font_size", "RichTextLabel", 18)
+	theme.default_font_size = BASE_SIZE
+	theme.set_font_size("font_size", "Label", BASE_SIZE)
+	theme.set_font_size("font_size", "Button", BASE_SIZE)
+	theme.set_font_size("font_size", "LineEdit", BASE_SIZE)
+	theme.set_font_size("font_size", "TextEdit", BASE_SIZE)
+	theme.set_font_size("font_size", "RichTextLabel", BASE_SIZE)
 	theme.set_constant("minimum_character_width", "LineEdit", 1)
 	return theme

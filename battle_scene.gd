@@ -3,10 +3,11 @@ extends Control
 signal return_to_title
 signal move_dest_chosen(pos: Vector2i)
 signal attack_target_chosen(enemy_idx: int)
+signal bless_market_chosen(market_slot: int)
 signal next_round_confirmed
 
-const CARD_PANEL_SIZE := Vector2(88, 88)
-const PLAYER_PANEL_WIDTH := 470
+var CARD_PANEL_SIZE := Vector2(UITheme.font_size(74), UITheme.font_size(74))
+var PLAYER_PANEL_WIDTH := UITheme.font_size(400)
 const PLAYER_MAX_SELECTED := 3
 const PLAYER_HAND_SIZE := 5
 const ACTIVE_PLAYER_COLOR := Color(0.16, 0.28, 0.48)
@@ -39,6 +40,7 @@ var _pending_attack_player_index := -1
 var _targetable_enemy_indices: Array = []
 var _active_target_enemy_idx := -1
 var _enemy_panel_target_tweens: Dictionary = {}
+var _attention_buttons: Dictionary = {}
 var _board_zoom_size := Board3D.ZOOM_DEFAULT
 var online_session = null
 var online_enabled := false
@@ -46,11 +48,11 @@ var online_is_host := false
 var owned_seat_index := 0
 var _last_guest_snapshot_revision := -1
 var _level_up_queue: Array = []
+var _pending_bless_seat := -1
 
 var round_lbl: Label
 var phase_lbl: Label
 var active_player_lbl: Label
-var order_lbl: Label
 var _turn_order_row: Control = null
 var planning_hint_lbl: Label
 var prev_player_btn: Button
@@ -80,6 +82,8 @@ var _active_resolving_card := -1
 var _player_cards: Array = []
 var _rotate_btns: Array = []  # Move rotation buttons: Array[Array[Button]] per seat per hand slot
 var _rotate_block_btns: Array = []  # Block rotation buttons: Array[Array[Button]] per seat per hand slot
+var _bless_market_panels: Array = []  # Array[PanelContainer] for the 3 market slots
+var _player_bless_panels: Array = []  # Array[Array[PanelContainer]] per seat, up to 3 bless cards
 
 func configure_battle(player_count: int) -> void:
 	requested_player_count = clampi(player_count, 1, BattleState.MAX_PLAYERS)
@@ -101,6 +105,20 @@ func _ready() -> void:
 	_build_ui()
 	_connect_online_session()
 	_start_battle()
+
+func _process(delta: float) -> void:
+	if _attention_buttons.is_empty():
+		return
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * TAU * 0.8)
+	for key in _attention_buttons.keys():
+		var data: Dictionary = _attention_buttons[key]
+		var btn: Button = data.get("btn") as Button
+		if btn == null or not is_instance_valid(btn):
+			_attention_buttons.erase(key)
+			continue
+		var base_color: Color = data.get("base_color", Color.WHITE)
+		var accent_color: Color = data.get("accent_color", Color.WHITE)
+		_style_btn(btn, base_color, accent_color, true, pulse)
 
 func _connect_online_session() -> void:
 	if online_session == null:
@@ -136,7 +154,7 @@ func _build_ui() -> void:
 	var margin := MarginContainer.new()
 	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 8)
+		margin.add_theme_constant_override(side, 6)
 	add_child(margin)
 
 	var root := VBoxContainer.new()
@@ -172,7 +190,7 @@ func _build_top_bar(parent: Control) -> void:
 
 	prev_player_btn = Button.new()
 	prev_player_btn.text = "Prev Player"
-	prev_player_btn.custom_minimum_size = Vector2(112, 34)
+	prev_player_btn.custom_minimum_size = Vector2(96, 28)
 	_style_btn(prev_player_btn, Color(0.20, 0.26, 0.42))
 	prev_player_btn.pressed.connect(func() -> void:
 		_focus_unready_player(-1)
@@ -181,7 +199,7 @@ func _build_top_bar(parent: Control) -> void:
 
 	next_player_btn = Button.new()
 	next_player_btn.text = "Next Player"
-	next_player_btn.custom_minimum_size = Vector2(112, 34)
+	next_player_btn.custom_minimum_size = Vector2(96, 28)
 	_style_btn(next_player_btn, Color(0.20, 0.26, 0.42))
 	next_player_btn.pressed.connect(func() -> void:
 		_focus_unready_player(1)
@@ -201,12 +219,8 @@ func _build_top_bar(parent: Control) -> void:
 	order_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	middle.add_child(order_area)
 
-	order_lbl = _lbl("Order: -")
-	order_lbl.clip_text = true
-	order_area.add_child(order_lbl)
-
 	_turn_order_row = Control.new()
-	_turn_order_row.custom_minimum_size = Vector2(0, 44)
+	_turn_order_row.custom_minimum_size = Vector2(0, UITheme.font_size(38))
 	_turn_order_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_turn_order_row.visible = true
 	order_area.add_child(_turn_order_row)
@@ -240,6 +254,32 @@ func _build_players_column(parent: Control) -> void:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 6)
 	outer.add_child(column)
+
+	# ── Bless Market strip ──────────────────────────────────────────────────────
+	var market_panel := PanelContainer.new()
+	market_panel.add_theme_stylebox_override("panel", _flat_style(Color(0.12, 0.10, 0.18), 4, 4))
+	column.add_child(market_panel)
+
+	var market_vbox := VBoxContainer.new()
+	market_vbox.add_theme_constant_override("separation", 2)
+	market_panel.add_child(market_vbox)
+
+	var market_lbl := _lbl("Bless Market", true)
+	market_lbl.add_theme_color_override("font_color", Color(0.82, 0.72, 1.0))
+	market_vbox.add_child(market_lbl)
+
+	var market_row := HBoxContainer.new()
+	market_row.add_theme_constant_override("separation", 4)
+	market_vbox.add_child(market_row)
+
+	_bless_market_panels.clear()
+	for _mi in range(3):
+		var mp := _make_bless_card_panel()
+		mp.gui_input.connect(_on_bless_market_panel_input.bind(_mi))
+		market_row.add_child(mp)
+		_bless_market_panels.append(mp)
+	# ────────────────────────────────────────────────────────────────────────────
+
 	column.add_child(scroll)
 
 	var vbox := VBoxContainer.new()
@@ -249,6 +289,7 @@ func _build_players_column(parent: Control) -> void:
 	_player_cards.clear()
 	_rotate_btns.clear()
 	_rotate_block_btns.clear()
+	_player_bless_panels.clear()
 	for seat_index in range(BattleState.MAX_PLAYERS):
 		var panel := PanelContainer.new()
 		panel.custom_minimum_size = Vector2(PLAYER_PANEL_WIDTH - 24, 0)
@@ -282,7 +323,7 @@ func _build_players_column(parent: Control) -> void:
 
 		var ready_btn := Button.new()
 		ready_btn.text = "Ready"
-		ready_btn.custom_minimum_size = Vector2(76, 28)
+		ready_btn.custom_minimum_size = Vector2(66, 24)
 		_style_btn(ready_btn, Color(0.18, 0.45, 0.22))
 		ready_btn.pressed.connect(_on_ready_pressed.bind(seat_index))
 		header.add_child(ready_btn)
@@ -292,7 +333,7 @@ func _build_players_column(parent: Control) -> void:
 		panel_vbox.add_child(meta_lbl)
 
 		var stamina_holder := Control.new()
-		stamina_holder.custom_minimum_size = Vector2(0, 22)
+		stamina_holder.custom_minimum_size = Vector2(0, 18)
 		panel_vbox.add_child(stamina_holder)
 
 		var stamina_lbl := _lbl("Stamina: 3/3")
@@ -333,7 +374,7 @@ func _build_players_column(parent: Control) -> void:
 			rot_btn.text = "\u21bb Mv"
 			rot_btn.custom_minimum_size = Vector2(CARD_PANEL_SIZE.x, 20)
 			_style_btn(rot_btn, Color(0.28, 0.22, 0.44))
-			rot_btn.add_theme_font_size_override("font_size", 12)
+			rot_btn.add_theme_font_size_override("font_size", UITheme.font_size(12))
 			rot_btn.pressed.connect(_try_rotate_card.bind(seat_index, hand_idx, "move"))
 			slot_vbox.add_child(rot_btn)
 			seat_rotate_btns.append(rot_btn)
@@ -342,13 +383,31 @@ func _build_players_column(parent: Control) -> void:
 			block_btn.text = "\u21bb Blk"
 			block_btn.custom_minimum_size = Vector2(CARD_PANEL_SIZE.x, 20)
 			_style_btn(block_btn, Color(0.18, 0.32, 0.46))
-			block_btn.add_theme_font_size_override("font_size", 12)
+			block_btn.add_theme_font_size_override("font_size", UITheme.font_size(12))
 			block_btn.pressed.connect(_try_rotate_card.bind(seat_index, hand_idx, "block"))
 			slot_vbox.add_child(block_btn)
 			seat_rotate_block_btns.append(block_btn)
 
 		_rotate_btns.append(seat_rotate_btns)
 		_rotate_block_btns.append(seat_rotate_block_btns)
+
+		# ── Bless hand row (Cleric only) ─────────────────────────────────────────
+		var bless_row_lbl := _lbl("Bless:")
+		bless_row_lbl.add_theme_color_override("font_color", Color(0.82, 0.72, 1.0))
+		panel_vbox.add_child(bless_row_lbl)
+
+		var bless_row := HBoxContainer.new()
+		bless_row.add_theme_constant_override("separation", 4)
+		panel_vbox.add_child(bless_row)
+
+		var seat_bless_panels: Array = []
+		for _bi in range(3):
+			var bp := _make_bless_card_panel()
+			bp.gui_input.connect(_on_bless_hand_card_input.bind(seat_index, _bi))
+			bless_row.add_child(bp)
+			seat_bless_panels.append(bp)
+		_player_bless_panels.append(seat_bless_panels)
+		# ─────────────────────────────────────────────────────────────────────────
 
 		_player_cards.append({
 			"panel": panel,
@@ -368,6 +427,8 @@ func _build_players_column(parent: Control) -> void:
 			"ready_btn": ready_btn,
 			"selected_cards": selected_cards,
 			"hand_cards": hand_cards,
+			"bless_row_lbl": bless_row_lbl,
+			"bless_row": bless_row,
 		})
 
 	_build_log(column)
@@ -433,35 +494,35 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel.add_child(panel_vbox)
 
 		var title_lbl := _lbl("Enemy %d" % (i + 1), true)
-		title_lbl.add_theme_font_size_override("font_size", 17)
+		title_lbl.add_theme_font_size_override("font_size", UITheme.font_size(14))
 		panel_vbox.add_child(title_lbl)
 		var hp_lbl := _lbl("HP: 6/6")
-		hp_lbl.add_theme_font_size_override("font_size", 15)
+		hp_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		hp_lbl.add_theme_color_override("font_color", ENEMY_HP_BASE_COLOR)
 		panel_vbox.add_child(hp_lbl)
 		_enemy_hp_lbls.append(hp_lbl)
 
 		var block_lbl := _lbl("Block: 0")
-		block_lbl.add_theme_font_size_override("font_size", 15)
+		block_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		block_lbl.add_theme_color_override("font_color", Color(0.52, 0.72, 0.98))
 		panel_vbox.add_child(block_lbl)
 		_enemy_block_lbls.append(block_lbl)
 
 		var status_lbl := _lbl("")
-		status_lbl.add_theme_font_size_override("font_size", 15)
+		status_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		status_lbl.add_theme_color_override("font_color", ENEMY_STATUS_BASE_COLOR)
 		panel_vbox.add_child(status_lbl)
 		_enemy_status_lbls.append(status_lbl)
 
 		var behavior_lbl := _lbl("Intent: ?\n\n")
-		behavior_lbl.add_theme_font_size_override("font_size", 15)
+		behavior_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		behavior_lbl.clip_text = false
-		behavior_lbl.custom_minimum_size = Vector2(0, 50)
+		behavior_lbl.custom_minimum_size = Vector2(0, 42)
 		panel_vbox.add_child(behavior_lbl)
 		_enemy_behavior_lbls.append(behavior_lbl)
 
 		var deck_lbl := _lbl("Draw: 6  Discard: 0")
-		deck_lbl.add_theme_font_size_override("font_size", 15)
+		deck_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		deck_lbl.add_theme_color_override("font_color", Color(0.64, 0.66, 0.74))
 		panel_vbox.add_child(deck_lbl)
 		_enemy_deck_lbls.append(deck_lbl)
@@ -474,7 +535,7 @@ func _build_enemy_panel(parent: Control) -> void:
 
 func _build_log(parent: Control) -> void:
 	_log_scroll = ScrollContainer.new()
-	_log_scroll.custom_minimum_size = Vector2(0, 96)
+	_log_scroll.custom_minimum_size = Vector2(0, 80)
 	_log_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_log_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	parent.add_child(_log_scroll)
@@ -482,7 +543,7 @@ func _build_log(parent: Control) -> void:
 	log_lbl = Label.new()
 	log_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_lbl.add_theme_color_override("font_color", Color(0.76, 0.76, 0.84))
-	log_lbl.add_theme_font_size_override("font_size", 15)
+	log_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 	log_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_log_scroll.add_child(log_lbl)
 
@@ -493,7 +554,7 @@ func _build_log(parent: Control) -> void:
 
 	next_round_btn = Button.new()
 	next_round_btn.text = "Next Round"
-	next_round_btn.custom_minimum_size = Vector2(144, 38)
+	next_round_btn.custom_minimum_size = Vector2(120, 32)
 	next_round_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_style_btn(next_round_btn, Color(0.18, 0.38, 0.52))
 	next_round_btn.visible = false
@@ -541,7 +602,6 @@ func _update_ui() -> void:
 	next_round_btn.disabled = online_enabled and not online_is_host
 	active_player_lbl.visible = multiplayer_ui
 	active_player_lbl.text = "Editing: %s" % _active_player().name
-	order_lbl.text = "Order: %s" % _actor_order_preview()
 	planning_hint_lbl.text = _planning_hint_text()
 
 	for enemy_idx in range(_enemy_panels.size()):
@@ -551,7 +611,7 @@ func _update_ui() -> void:
 			var prev_enemy_block = _enemy_prev_block[enemy_idx]
 			var prev_enemy_status = _enemy_prev_status[enemy_idx]
 			_refresh_enemy_panel_visual(enemy_idx)
-			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d  PA:%d" % [enemy.hp, enemy.max_hp, enemy.physical_armor]
+			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d" % [enemy.hp, enemy.max_hp]
 			_enemy_block_lbls[enemy_idx].text = "%s  Block: %d" % [enemy.enemy_type, enemy.block]
 			_enemy_status_lbls[enemy_idx].text = enemy.status_text()
 			_enemy_prev_hp[enemy_idx] = enemy.hp
@@ -602,7 +662,7 @@ func _update_ui() -> void:
 		ui["prev_hp"] = player.hp
 		ui["prev_block"] = player.block
 		ui["prev_status"] = ui["status_lbl"].text
-		ui["meta_lbl"].text = "Lv%d XP:%d/%d  Draw: %d  Discard: %d  Init: %s" % [
+		ui["meta_lbl"].text = "Lv%d XP:%.1f/%d  Draw: %d  Discard: %d  Init: %s" % [
 			player.level,
 			player.xp,
 			player.xp_for_next_level(),
@@ -610,7 +670,8 @@ func _update_ui() -> void:
 			player.discard_pile.size(),
 			"-" if player.selected.is_empty() else str(player.initiative())
 		]
-		ui["stamina_lbl"].text = "Stamina: %d/%d" % [player.max_stamina - player.selected_stamina(), player.max_stamina]
+		var eff_stam := player.effective_stamina()
+		ui["stamina_lbl"].text = "Stamina: %d/%d%s" % [eff_stam - player.selected_stamina(), eff_stam, " (+%d)" % player.stamina_bonus if player.stamina_bonus > 0 else ""]
 		if prev_hp != null and int(prev_hp) != player.hp:
 			_pulse_player_stat_label(ui, "hp_lbl", "hp_tween", HP_BASE_COLOR, HP_GAIN_COLOR if player.hp > int(prev_hp) else HP_LOSS_COLOR)
 		if prev_block != null and int(prev_block) != player.block:
@@ -629,9 +690,22 @@ func _update_ui() -> void:
 		panel.add_theme_stylebox_override("panel", _flat_style(panel_color, 6, 6))
 
 		var ready_btn: Button = ui["ready_btn"]
-		ready_btn.disabled = ui_locked or bs.current_phase != BattleState.Phase.SELECT or not player.alive
+		ready_btn.disabled = (
+			ui_locked
+			or bs.current_phase != BattleState.Phase.SELECT
+			or not player.alive
+			or (not player.ready and player.selected.is_empty())
+		)
 		ready_btn.text = "Unready" if player.ready else "Ready"
-		_style_btn(ready_btn, Color(0.54, 0.30, 0.18) if player.ready else Color(0.18, 0.45, 0.22))
+		var ready_color := Color(0.54, 0.30, 0.18) if player.ready else Color(0.18, 0.45, 0.22)
+		_style_btn(ready_btn, ready_color)
+		var should_highlight_ready := (
+			_player_is_editable(player)
+			and _pending_move_player_index < 0
+			and _pending_attack_player_index < 0
+			and _pending_bless_seat < 0
+		)
+		_set_button_attention(ready_btn, should_highlight_ready, ready_color, Color(0.56, 1.0, 0.70))
 
 		var selected_cards: Array = ui["selected_cards"]
 		for card_idx in range(PLAYER_MAX_SELECTED):
@@ -655,12 +729,47 @@ func _update_ui() -> void:
 				block_btn.visible = can_edit and hand_card != null
 				block_btn.disabled = not can_edit or hand_card == null or not player.can_select(CardData.create_rotate_block_card(hand_card.card_name, hand_card.initiative))
 
+	_update_bless_ui()
+	_set_button_attention(
+		next_round_btn,
+		next_round_btn.visible and not next_round_btn.disabled,
+		Color(0.18, 0.38, 0.52),
+		Color(0.72, 0.92, 1.0)
+	)
 	_update_board()
 	var log_lines: Array = bs.combat_log.slice(maxi(0, bs.combat_log.size() - 4))
 	log_lbl.text = "\n".join(log_lines)
 	if _log_scroll:
 		_log_scroll.set_deferred("scroll_vertical", 999999)
 	_sync_online_snapshot()
+
+func _update_bless_ui() -> void:
+	var in_select := bs.current_phase == BattleState.Phase.SELECT
+	var choosing_bless := _pending_bless_seat >= 0
+	# Market panels
+	for i in range(_bless_market_panels.size()):
+		var card: BlessCardData = bs.bless_market[i] as BlessCardData if i < bs.bless_market.size() else null
+		var choosable := choosing_bless and card != null
+		_refresh_bless_panel(_bless_market_panels[i] as PanelContainer, card, false, choosable)
+		(_bless_market_panels[i] as PanelContainer).mouse_filter = Control.MOUSE_FILTER_STOP if choosable else Control.MOUSE_FILTER_IGNORE
+	# Per-player bless hand panels
+	for seat_index in range(_player_bless_panels.size()):
+		if seat_index >= bs.players.size():
+			continue
+		var player := bs.get_player(seat_index)
+		if player == null:
+			continue
+		var is_cleric := player.hero_type == "Cleric"
+		var can_play := in_select and _player_is_editable(player) and not player.ready and not ui_locked
+		var ui: Dictionary = _player_cards[seat_index] as Dictionary
+		ui["bless_row_lbl"].visible = is_cleric
+		ui["bless_row"].visible = is_cleric
+		var seat_panels: Array = _player_bless_panels[seat_index] as Array
+		for bi in range(seat_panels.size()):
+			var bp := seat_panels[bi] as PanelContainer
+			var bc: BlessCardData = player.bless_cards[bi] as BlessCardData if bi < player.bless_cards.size() else null
+			_refresh_bless_panel(bp, bc, can_play and bc != null)
+			bp.mouse_filter = Control.MOUSE_FILTER_STOP if (can_play and bc != null) else Control.MOUSE_FILTER_IGNORE
 
 func _update_board() -> void:
 	if board_3d == null:
@@ -695,6 +804,13 @@ func _planning_hint_text() -> String:
 func _on_board_view_gui_input(event: InputEvent) -> void:
 	if board_3d == null:
 		return
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			var prefer_tile := _pending_move_player_index >= 0
+			if board_3d.handle_board_click(mb.position, prefer_tile):
+				get_viewport().set_input_as_handled()
+				return
 	if board_3d.handle_camera_input(event):
 		_board_zoom_size = board_3d.get_zoom_size()
 
@@ -709,18 +825,6 @@ func _phase_text(phase: int) -> String:
 		BattleState.Phase.DEFEAT: return "Defeat"
 		_: return "Title"
 
-func _actor_order_preview() -> String:
-	var pieces: Array[String] = []
-	for actor in bs.build_actor_order(false):
-		if actor["actor_type"] == "player":
-			var player = bs.get_player(int(actor["seat_index"]))
-			pieces.append("%s(%d)" % [player.name, actor["initiative"]])
-		else:
-			pieces.append("E%d(%d)" % [int(actor["enemy_index"]) + 1, actor["initiative"]])
-	if pieces.is_empty():
-		return "all players pass"
-	return " → ".join(pieces)
-
 func _show_turn_order(actors: Array) -> void:
 	if _turn_order_row == null:
 		return
@@ -730,7 +834,7 @@ func _show_turn_order(actors: Array) -> void:
 		return
 
 	var tokens: Array = []
-	var final_gap := 14.0
+	var final_gap := float(UITheme.font_size(14))
 	var initial_actors: Array = actors.duplicate()
 	initial_actors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return int(a["seat_index"]) < int(b["seat_index"])
@@ -738,7 +842,7 @@ func _show_turn_order(actors: Array) -> void:
 	for actor_idx in range(initial_actors.size()):
 		var actor := initial_actors[actor_idx] as Dictionary
 		var token := _make_turn_order_token(actor)
-		token.position = Vector2(float(actor_idx) * (110.0 + final_gap), 4)
+		token.position = Vector2(float(actor_idx) * (float(UITheme.font_size(110)) + final_gap), 4)
 		token.set_meta("actor_key", _actor_key(actor))
 		_turn_order_row.add_child(token)
 		tokens.append(token)
@@ -750,12 +854,13 @@ func _show_turn_order(actors: Array) -> void:
 	tw.set_trans(Tween.TRANS_CUBIC)
 	for token in tokens:
 		var target_idx: int = _actor_order_index(actors, String(token.get_meta("actor_key")))
-		var target_x := float(target_idx) * (110.0 + final_gap)
+		var target_x := float(target_idx) * (float(UITheme.font_size(110)) + final_gap)
 		tw.tween_property(token, "position:x", target_x, 0.42)
 	await tw.finished
 	for i in range(maxi(actors.size() - 1, 0)):
 		var arrow := _lbl("→", true)
-		arrow.position = Vector2(float(i) * (110.0 + final_gap) + 116.0, 16.0)
+		var token_stride := float(UITheme.font_size(110)) + final_gap
+		arrow.position = Vector2(float(i) * token_stride + float(UITheme.font_size(90)) + final_gap * 0.5 - 8.0, 16.0)
 		_turn_order_row.add_child(arrow)
 	await get_tree().create_timer(0.55).timeout
 
@@ -781,7 +886,7 @@ func _make_turn_order_token(actor: Dictionary) -> PanelContainer:
 	else:
 		title = "ENEMY %d" % (int(actor["enemy_index"]) + 1)
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(110, 46)
+	panel.custom_minimum_size = Vector2(UITheme.font_size(90), UITheme.font_size(38))
 	panel.add_theme_stylebox_override("panel", _flat_style(color, 6, 6))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 2)
@@ -863,6 +968,10 @@ func _toggle_player_ready(player) -> void:
 	if online_enabled and player.seat_index != owned_seat_index:
 		return
 	var new_ready: bool = not player.ready
+	if new_ready and player.selected.is_empty():
+		bs.log_msg("%s must select at least 1 card before pressing Ready." % player.name)
+		_update_ui()
+		return
 	if new_ready and player.selected.size() > player.selection_limit():
 		bs.log_msg("%s is stunned and can only ready 1 selected card." % player.name)
 		_update_ui()
@@ -886,6 +995,56 @@ func _on_hand_card_input(event: InputEvent, seat_index: int, hand_index: int) ->
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		return
 	_try_select_hand(bs.get_player(seat_index), hand_index)
+
+func _on_bless_market_panel_input(event: InputEvent, market_slot: int) -> void:
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	if _pending_bless_seat < 0:
+		return
+	if market_slot >= bs.bless_market.size() or bs.bless_market[market_slot] == null:
+		return
+	if online_enabled and not online_is_host:
+		if _pending_bless_seat == owned_seat_index:
+			online_session.send_command({
+				"kind": "choose_bless_market_slot",
+				"seat_index": owned_seat_index,
+				"market_slot": market_slot,
+			})
+		return
+	bless_market_chosen.emit(market_slot)
+
+func _on_bless_hand_card_input(event: InputEvent, seat_index: int, bless_slot: int) -> void:
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	var player := bs.get_player(seat_index)
+	if player == null or not _player_is_editable(player) or player.ready or ui_locked:
+		return
+	if bs.current_phase != BattleState.Phase.SELECT:
+		return
+	if bless_slot >= player.bless_cards.size():
+		return
+	if online_enabled and not online_is_host:
+		online_session.send_command({
+			"kind": "play_bless_card",
+			"seat_index": seat_index,
+			"bless_slot": bless_slot,
+		})
+		return
+	_do_play_bless_card(seat_index, bless_slot)
+
+func _do_play_bless_card(seat_index: int, bless_slot: int) -> void:
+	var player := bs.get_player(seat_index)
+	if player == null:
+		return
+	var card: BlessCardData = player.bless_cards[bless_slot] as BlessCardData if bless_slot < player.bless_cards.size() else null
+	if card == null:
+		return
+	ui_locked = true
+	bs.log_msg("%s plays %s (Side %s)." % [player.name, card.card_name, "I" if card.side == 1 else "II"])
+	var effect := bs.play_bless_card(seat_index, bless_slot)
+	await _apply_bless_card_effect(player, effect)
+	ui_locked = false
+	_update_ui()
 
 func _try_select_hand(player, hand_index: int) -> void:
 	if player == null or not _player_is_editable(player):
@@ -1217,7 +1376,6 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 			var aoe_adj: bool = bool(fx.get("aoe_adjacent", false))
 			var aoe_all_range: bool = bool(fx.get("aoe_all_in_range", false))
 			var apply_cond: String = String(fx.get("apply_condition", ""))
-			var bless_active: bool = player.bless
 
 			if aoe_adj or aoe_all_range:
 				var hit_any := false
@@ -1226,9 +1384,7 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 					var enemy: EnemyState = enemy_entry as EnemyState
 					if aoe_adj and Pathfinder.manhattan(player.pos, enemy.pos) != 1:
 						continue
-					if bless_active and player.bless:
-						player.bless = false
-					var raw: int = _attack_raw_damage(fx, enemy, bless_active)
+					var raw: int = _attack_raw_damage(fx, enemy, player)
 					if board_3d:
 						if rng > 1:
 							await board_3d.animate_ranged_attack(player.pos, enemy.pos)
@@ -1257,22 +1413,21 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 				bs.log_msg("  %s: targeting cancelled." % player.name)
 				await get_tree().create_timer(0.18).timeout
 				return
-			if bless_active and player.bless:
-				player.bless = false
-			var raw: int = _attack_raw_damage(fx, target, bless_active)
+			var effective_ignore_block := ignore_block or player.pending_bless_ignore_block or player.pending_bless_ignore_block_all
+			if player.pending_bless_ignore_block:
+				player.pending_bless_ignore_block = false
+			var raw: int = _attack_raw_damage(fx, target, player)
 			var hp_before: int = target.hp
 			if board_3d:
 				if is_ranged:
 					await board_3d.animate_ranged_attack(player.pos, target.pos)
 				else:
 					await board_3d.animate_melee_attack(player.pos, target.pos)
-				if target.block > 0 and not ignore_block:
+				if attack_type != "magic" and target.block > 0 and not effective_ignore_block:
 					await board_3d.animate_block(target.pos)
 				await board_3d.animate_enemy_hit(target.index)
-			var actual := bs.apply_damage_enemy(target, raw, attack_type, ignore_block)
+			var actual := bs.apply_damage_enemy(target, raw, attack_type, effective_ignore_block)
 			var msg := "  %s deals %d" % [player.name, raw]
-			if bless_active:
-				msg += " (x1.5 Bless)"
 			msg += " — %d absorbed = %d HP lost (Enemy %d: %d→%d)" % [raw - actual, actual, target.index + 1, hp_before, target.hp]
 			bs.log_msg(msg)
 			if apply_cond != "" and target.alive:
@@ -1302,12 +1457,10 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 				var result_msg: String = heal_target.apply_heal(int(fx.get("value", 0)))
 				bs.log_msg("  %s heals %s: %s" % [player.name, heal_target.name, result_msg])
 				if bool(fx.get("also_bless", false)):
-					heal_target.bless = true
-					bs.log_msg("  %s gains Bless." % heal_target.name)
+					await _grant_bless(heal_target)
 				elif bool(fx.get("bless_if_no_conditions", false)):
 					if not heal_target.has_any_condition():
-						heal_target.bless = true
-						bs.log_msg("  %s gains Bless (no conditions)." % heal_target.name)
+						await _grant_bless(heal_target)
 			await get_tree().create_timer(0.14).timeout
 
 		"block":
@@ -1324,7 +1477,7 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 			elif block_target == "all_allies_in_range":
 				for ally_entry in _allies_in_range(player, int(fx.get("range", 0)), true):
 					var ally: PlayerState = ally_entry as PlayerState
-					var block_value: int = int(fx.get("bless_bonus_value", fx["value"])) if ally.bless else int(fx["value"])
+					var block_value: int = int(fx.get("bless_bonus_value", fx["value"])) if ally.bless_cards.size() > 0 else int(fx["value"])
 					ally.block += block_value
 					bs.log_msg("  %s gains Block %d (→%d)" % [ally.name, block_value, ally.block])
 			elif block_target == "self_or_ally":
@@ -1333,8 +1486,7 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 					target.block += fx["value"]
 					bs.log_msg("  %s gains Block %d (→%d)" % [target.name, fx["value"], target.block])
 					if bool(fx.get("also_bless", false)):
-						target.bless = true
-						bs.log_msg("  %s gains Bless." % target.name)
+						await _grant_bless(target)
 			else:
 				player.block += fx["value"]
 				bs.log_msg("  %s gains Block %d (→%d)" % [player.name, fx["value"], player.block])
@@ -1350,9 +1502,7 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 
 		"bless":
 			for ally_entry in _resolve_ally_targets(player, fx):
-				var ally: PlayerState = ally_entry as PlayerState
-				ally.bless = true
-				bs.log_msg("  %s gains Bless." % ally.name)
+				await _grant_bless(ally_entry as PlayerState)
 			await get_tree().create_timer(0.14).timeout
 
 		"sanctuary":
@@ -1375,12 +1525,10 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 			await get_tree().create_timer(0.14).timeout
 
 		"bless_self_and_one_adjacent_ally":
-			player.bless = true
-			bs.log_msg("  %s gains Bless." % player.name)
+			await _grant_bless(player)
 			var adj_ally: PlayerState = _nearest_living_ally(player.pos, player.seat_index, 1)
 			if adj_ally != null:
-				adj_ally.bless = true
-				bs.log_msg("  %s gains Bless." % adj_ally.name)
+				await _grant_bless(adj_ally)
 			await get_tree().create_timer(0.14).timeout
 
 		"push", "push_target":
@@ -1526,18 +1674,50 @@ func _allies_in_range(player: PlayerState, max_range: int, include_self: bool) -
 	targets.sort_custom(func(a, b) -> bool: return a.seat_index < b.seat_index)
 	return targets
 
-func _attack_raw_damage(fx: Dictionary, enemy: EnemyState, bless_active: bool) -> int:
+func _attack_raw_damage(fx: Dictionary, enemy: EnemyState, player: PlayerState) -> int:
 	var raw: int = int(fx["value"])
 	if enemy != null and _is_enemy_undead(enemy):
 		raw *= int(fx.get("undead_multiplier", 1))
 		raw += int(fx.get("undead_bonus", 0))
 	if fx.has("party_bless_bonus"):
-		# TODO: This card text counts Bless cards currently held by allies.
-		# The prototype only tracks a spent-on-attack Bless status, not held Bless cards.
-		pass
-	if bless_active:
-		raw = int(ceil(float(raw) * 1.5))
+		var bonus := bs.party_bless_count() * int(fx.get("party_bless_bonus", 2))
+		raw += bonus
+		if bonus > 0:
+			bs.log_msg("  Party Bless bonus: +%d damage (%d cards held)" % [bonus, bs.party_bless_count()])
+	if player != null and player.pending_bless_damage_bonus > 0:
+		raw += player.pending_bless_damage_bonus
+		bs.log_msg("  Bless of Power: +%d damage" % player.pending_bless_damage_bonus)
+		player.pending_bless_damage_bonus = 0
 	return raw
+
+func _grant_bless(target: PlayerState) -> void:
+	if target == null or not target.alive:
+		return
+	var available_slots: Array = []
+	for i in range(bs.bless_market.size()):
+		if bs.bless_market[i] != null:
+			available_slots.append(i)
+	if available_slots.is_empty():
+		bs.log_msg("  %s: no Bless cards available in the market." % target.name)
+		return
+	var chosen_slot: int
+	if available_slots.size() == 1:
+		chosen_slot = available_slots[0]
+	else:
+		_pending_bless_seat = target.seat_index
+		_update_bless_ui()
+		_sync_online_snapshot()
+		bs.log_msg("  %s: choose a Bless card from the market." % target.name)
+		chosen_slot = await bless_market_chosen
+		_pending_bless_seat = -1
+		_update_bless_ui()
+		_sync_online_snapshot()
+	if bs.grant_bless_to(target.seat_index, chosen_slot):
+		var card: BlessCardData = target.bless_cards.back() as BlessCardData
+		bs.log_msg("  %s receives Bless card: %s (Side I)." % [target.name, card.card_name])
+		_update_ui()
+	else:
+		bs.log_msg("  %s: could not receive Bless card." % target.name)
 
 func _is_enemy_undead(enemy: EnemyState) -> bool:
 	if enemy == null:
@@ -1567,6 +1747,67 @@ func _clear_player_conditions(player: PlayerState, max_count: int) -> int:
 		player.burn = 0
 		removed += 1
 	return removed
+
+func _apply_bless_card_effect(player: PlayerState, effect: Dictionary) -> void:
+	if effect.is_empty():
+		return
+	var eff_type: String = String(effect.get("type", ""))
+	match eff_type:
+		"bless_block":
+			var val: int = int(effect.get("value", 0))
+			player.block += val
+			bs.log_msg("  %s plays Bless: gains Block %d (→%d)." % [player.name, val, player.block])
+
+		"bless_heal":
+			if bool(effect.get("cleanse", false)):
+				var cleared := _clear_player_conditions(player, 999)
+				if cleared > 0:
+					bs.log_msg("  %s: all conditions cleared by Bless." % player.name)
+			var result_msg := player.apply_heal(int(effect.get("value", 0)))
+			bs.log_msg("  %s plays Bless: %s." % [player.name, result_msg])
+
+		"bless_damage_bonus":
+			var val: int = int(effect.get("value", 0))
+			player.pending_bless_damage_bonus += val
+			bs.log_msg("  %s plays Bless: +%d damage on next attack." % [player.name, val])
+
+		"bless_ignore_block":
+			if bool(effect.get("all", false)):
+				player.pending_bless_ignore_block_all = true
+				bs.log_msg("  %s plays Bless: ignores Block on all attacks this turn." % player.name)
+			else:
+				player.pending_bless_ignore_block = true
+				bs.log_msg("  %s plays Bless: ignores Block on next attack." % player.name)
+
+		"bless_stamina":
+			var val: int = int(effect.get("value", 0))
+			player.stamina_bonus += val
+			bs.log_msg("  %s plays Bless: +%d Stamina this turn." % [player.name, val])
+
+		"bless_convert_condition":
+			var removed := _clear_player_conditions(player, 1)
+			if removed > 0:
+				player.block += 2
+				bs.log_msg("  %s plays Bless: condition removed, gains Block 2 (→%d)." % [player.name, player.block])
+			else:
+				bs.log_msg("  %s plays Bless: no conditions to remove." % player.name)
+
+		"bless_reflect":
+			player.pending_bless_reflect = true
+			player.pending_bless_reflect_multiplier = int(effect.get("multiplier", 1))
+			bs.log_msg("  %s plays Bless: will reflect damage this turn." % player.name)
+
+		"bless_move":
+			if player.entangle:
+				bs.log_msg("  %s plays Bless: entangled, cannot move." % player.name)
+			else:
+				await _resolve_player_move(player, int(effect.get("value", 1)))
+
+		"bless_luck":
+			bs.log_msg("  %s plays Bless: Luck has no effect (no Modifier Deck)." % player.name)
+
+		_:
+			bs.log_msg("  %s plays Bless: unknown effect type '%s'." % [player.name, eff_type])
 
 func _nearest_living_ally(from_pos: Vector2i, excluded_seat: int, max_range: int) -> PlayerState:
 	var best: PlayerState = null
@@ -1819,7 +2060,7 @@ func _enemy_strike(enemy: EnemyState, target: PlayerState, fx: Dictionary, is_me
 			await board_3d.animate_melee_attack(enemy.pos, target.pos)
 		else:
 			await board_3d.animate_ranged_attack(enemy.pos, target.pos)
-		if target.block > 0 and not ignore_block:
+		if attack_type != "magic" and target.block > 0 and not ignore_block:
 			await board_3d.animate_block(target.pos)
 		await board_3d.animate_player_hit(target.seat_index)
 	var actual := bs.apply_damage_player(target, raw, attack_type, ignore_block)
@@ -2021,13 +2262,13 @@ func _apply_condition_to_enemy(enemy: EnemyState, condition: String) -> void:
 # ─── XP and Level-Up ─────────────────────────────────────────────────────────
 
 func _award_xp_for_kill(enemy: EnemyState) -> void:
-	var xp: int = enemy.xp_reward
+	var xp: float = enemy.xp_reward
 	for player_entry in bs.players:
 		var player: PlayerState = player_entry as PlayerState
 		if not player.alive:
 			continue
 		player.xp += xp
-		bs.log_msg("  %s earns %d XP (total: %d, next level: %d)." % [
+		bs.log_msg("  %s earns %.1f XP (total: %.1f, next level: %d)." % [
 			player.name, xp, player.xp, player.xp_for_next_level()])
 		if player.can_level_up() and not _level_up_queue.has(player.seat_index):
 			_level_up_queue.append(player.seat_index)
@@ -2205,6 +2446,27 @@ func _stop_enemy_panel_target_pulse(enemy_idx: int) -> void:
 	if enemy_idx >= 0 and enemy_idx < _enemy_panels.size() and _enemy_panels[enemy_idx] != null:
 		_enemy_panels[enemy_idx].scale = Vector2.ONE
 
+func _set_button_attention(btn: Button, enabled: bool, base_color: Color, accent: Color) -> void:
+	if btn == null:
+		return
+	if enabled:
+		_register_button_attention(btn, base_color, accent)
+	else:
+		_style_btn(btn, base_color)
+		_unregister_button_attention(btn)
+
+func _register_button_attention(btn: Button, base_color: Color, accent: Color) -> void:
+	var key := btn.get_instance_id()
+	_attention_buttons[key] = {
+		"btn": btn,
+		"base_color": base_color,
+		"accent_color": accent,
+	}
+
+func _unregister_button_attention(btn: Button) -> void:
+	var key := btn.get_instance_id()
+	_attention_buttons.erase(key)
+
 # ─── Card Panel UI ────────────────────────────────────────────────────────────
 
 func _make_card_panel() -> PanelContainer:
@@ -2217,18 +2479,18 @@ func _make_card_panel() -> PanelContainer:
 	panel.add_child(vbox)
 
 	var name_lbl := Label.new()
-	name_lbl.add_theme_font_size_override("font_size", 15)
+	name_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 	name_lbl.add_theme_color_override("font_color", Color(0.92, 0.92, 0.95))
 	name_lbl.clip_text = true
 	vbox.add_child(name_lbl)
 
 	var meta_lbl := Label.new()
-	meta_lbl.add_theme_font_size_override("font_size", 13)
+	meta_lbl.add_theme_font_size_override("font_size", UITheme.font_size(11))
 	meta_lbl.add_theme_color_override("font_color", Color(0.82, 0.78, 0.42))
 	vbox.add_child(meta_lbl)
 
 	var fx_lbl := Label.new()
-	fx_lbl.add_theme_font_size_override("font_size", 13)
+	fx_lbl.add_theme_font_size_override("font_size", UITheme.font_size(11))
 	fx_lbl.add_theme_color_override("font_color", Color(0.74, 0.74, 0.82))
 	fx_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(fx_lbl)
@@ -2238,6 +2500,74 @@ func _make_card_panel() -> PanelContainer:
 	panel.set_meta("fx_lbl", fx_lbl)
 	_refresh_card_panel(panel, null, false)
 	return panel
+
+func _make_bless_card_panel() -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(CARD_PANEL_SIZE.x, 62)
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 1)
+	panel.add_child(vbox)
+
+	var name_lbl := Label.new()
+	name_lbl.add_theme_font_size_override("font_size", UITheme.font_size(12))
+	name_lbl.add_theme_color_override("font_color", Color(0.90, 0.84, 1.0))
+	name_lbl.clip_text = true
+	vbox.add_child(name_lbl)
+
+	var side_lbl := Label.new()
+	side_lbl.add_theme_font_size_override("font_size", UITheme.font_size(10))
+	side_lbl.add_theme_color_override("font_color", Color(0.70, 0.60, 0.90))
+	vbox.add_child(side_lbl)
+
+	var fx_lbl := Label.new()
+	fx_lbl.add_theme_font_size_override("font_size", UITheme.font_size(10))
+	fx_lbl.add_theme_color_override("font_color", Color(0.76, 0.76, 0.90))
+	fx_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(fx_lbl)
+
+	panel.set_meta("name_lbl", name_lbl)
+	panel.set_meta("side_lbl", side_lbl)
+	panel.set_meta("fx_lbl", fx_lbl)
+	_refresh_bless_panel(panel, null, false)
+	return panel
+
+func _refresh_bless_panel(panel: PanelContainer, card: BlessCardData, playable: bool, choosable: bool = false) -> void:
+	var bg: Color
+	if card == null:
+		bg = Color(0.10, 0.09, 0.16)
+	elif choosable:
+		bg = Color(0.28, 0.22, 0.10)
+	elif playable:
+		bg = Color(0.22, 0.16, 0.36)
+	else:
+		bg = Color(0.16, 0.12, 0.26)
+	var style := _flat_style(bg, 4, 4)
+	if choosable and card != null:
+		style.border_color = Color(1.0, 0.85, 0.20)
+		style.border_width_left = 3
+		style.border_width_right = 3
+		style.border_width_top = 3
+		style.border_width_bottom = 3
+	elif playable and card != null:
+		style.border_color = Color(0.78, 0.60, 1.0)
+		style.border_width_left = 2
+		style.border_width_right = 2
+		style.border_width_top = 2
+		style.border_width_bottom = 2
+	panel.add_theme_stylebox_override("panel", style)
+	var name_lbl: Label = panel.get_meta("name_lbl") as Label
+	var side_lbl: Label = panel.get_meta("side_lbl") as Label
+	var fx_lbl: Label = panel.get_meta("fx_lbl") as Label
+	if card == null:
+		name_lbl.text = ""
+		side_lbl.text = ""
+		fx_lbl.text = ""
+	else:
+		name_lbl.text = card.card_name.replace("Blessing of ", "")
+		side_lbl.text = "Side %s" % ("I" if card.side == 1 else "II")
+		fx_lbl.text = card.display_text
 
 func _refresh_card_panel(panel: PanelContainer, card: CardData, selected: bool, active: bool = false) -> void:
 	var bg := Color(0.10, 0.10, 0.14)
@@ -2276,17 +2606,34 @@ func _flat_style(color: Color, radius: int = 4, margin: int = 6) -> StyleBoxFlat
 	style.content_margin_bottom = margin - 2
 	return style
 
-func _style_btn(btn: Button, color: Color) -> void:
-	btn.add_theme_stylebox_override("normal", _flat_style(color, 5, 6))
-	btn.add_theme_stylebox_override("hover", _flat_style(color.lightened(0.14), 5, 6))
-	btn.add_theme_stylebox_override("pressed", _flat_style(color.darkened(0.12), 5, 6))
-	btn.add_theme_font_size_override("font_size", 16)
+func _style_btn(btn: Button, color: Color, border_color: Color = Color(0, 0, 0, 0), attention: bool = false, pulse: float = 1.0) -> void:
+	var normal := _flat_style(color, 5, 6)
+	var hover := _flat_style(color.lightened(0.14), 5, 6)
+	var pressed := _flat_style(color.darkened(0.12), 5, 6)
+	if attention:
+		var border_alpha := lerpf(0.24, 0.80, pulse)
+		var shadow_alpha := lerpf(0.08, 0.34, pulse)
+		var border_width := 2 if pulse < 0.55 else 3
+		var glow_color := Color(border_color.r, border_color.g, border_color.b, border_alpha)
+		for style in [normal, hover, pressed]:
+			style.border_color = glow_color
+			style.border_width_left = border_width
+			style.border_width_right = border_width
+			style.border_width_top = border_width
+			style.border_width_bottom = border_width
+			style.shadow_color = Color(border_color.r, border_color.g, border_color.b, shadow_alpha)
+			style.shadow_size = 14
+			style.shadow_offset = Vector2.ZERO
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_font_size_override("font_size", UITheme.font_size(13))
 	btn.add_theme_color_override("font_color", Color.WHITE)
 
 func _lbl(text: String, bold: bool = false) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", 20 if bold else 18)
+	label.add_theme_font_size_override("font_size", UITheme.font_size(17 if bold else 15))
 	if bold:
 		label.add_theme_color_override("font_color", Color(0.95, 0.90, 0.76))
 	return label
@@ -2307,6 +2654,7 @@ func _sync_online_snapshot() -> void:
 		"highlighted_tiles": _serialize_positions(highlighted_tiles),
 		"pending_move_player_index": _pending_move_player_index,
 		"pending_attack_player_index": _pending_attack_player_index,
+		"pending_bless_seat": _pending_bless_seat,
 		"targetable_enemy_indices": _targetable_enemy_indices.duplicate(),
 		"active_target_enemy_idx": _active_target_enemy_idx,
 	}
@@ -2326,6 +2674,7 @@ func _on_online_room_state_updated(room_state: Dictionary) -> void:
 	highlighted_tiles = _deserialize_positions(snapshot.get("highlighted_tiles", []))
 	_pending_move_player_index = int(snapshot.get("pending_move_player_index", -1))
 	_pending_attack_player_index = int(snapshot.get("pending_attack_player_index", -1))
+	_pending_bless_seat = int(snapshot.get("pending_bless_seat", -1))
 	_targetable_enemy_indices.clear()
 	for enemy_idx in snapshot.get("targetable_enemy_indices", []):
 		_targetable_enemy_indices.append(int(enemy_idx))
@@ -2339,6 +2688,7 @@ func _on_online_room_state_updated(room_state: Dictionary) -> void:
 		and bs.current_phase != BattleState.Phase.REFRESH
 		and _pending_move_player_index < 0
 		and _pending_attack_player_index < 0
+		and _pending_bless_seat < 0
 	)
 	_update_ui()
 
@@ -2365,8 +2715,15 @@ func _on_online_command_received(command: Dictionary) -> void:
 			if player != null:
 				_select_rotated_card(player, int(payload.get("hand_index", -1)), "move")
 		"set_ready":
-			bs.set_player_ready(seat, bool(payload.get("ready", false)))
-			if bs.all_living_players_ready():
+			var wants_ready := bool(payload.get("ready", false))
+			if wants_ready:
+				var player = bs.get_player(seat)
+				if player == null or player.selected.is_empty():
+					bs.log_msg("%s must select at least 1 card before pressing Ready." % ("Player %d" % (seat + 1) if player == null else player.name))
+					_update_ui()
+					return
+			bs.set_player_ready(seat, wants_ready)
+			if wants_ready and bs.all_living_players_ready():
 				_run_round()
 		"choose_move_destination":
 			if seat == _pending_move_player_index:
@@ -2376,6 +2733,11 @@ func _on_online_command_received(command: Dictionary) -> void:
 		"choose_attack_target":
 			if seat == _pending_attack_player_index:
 				_try_choose_attack_target(int(payload.get("enemy_index", -1)))
+		"choose_bless_market_slot":
+			if seat == _pending_bless_seat:
+				bless_market_chosen.emit(int(payload.get("market_slot", 0)))
+		"play_bless_card":
+			await _do_play_bless_card(seat, int(payload.get("bless_slot", -1)))
 	_update_ui()
 
 func _on_online_request_failed(message: String) -> void:
