@@ -7,7 +7,8 @@ signal bless_market_chosen(market_slot: int)
 signal next_round_confirmed
 
 var CARD_PANEL_SIZE := Vector2(UITheme.font_size(74), UITheme.font_size(74))
-var PLAYER_PANEL_WIDTH := UITheme.font_size(400)
+var BLESS_PANEL_SIZE := Vector2(UITheme.font_size(104), UITheme.font_size(74))
+var PLAYER_PANEL_WIDTH := UITheme.font_size(310)
 const PLAYER_MAX_SELECTED := 3
 const PLAYER_HAND_SIZE := 5
 const ACTIVE_PLAYER_COLOR := Color(0.16, 0.28, 0.48)
@@ -31,6 +32,8 @@ const ENEMY_PANEL_TARGETABLE_COLOR := Color(0.40, 0.26, 0.08)
 const ENEMY_PANEL_ACTIVE_COLOR := Color(0.70, 0.56, 0.12)
 const MAP_TILE_DATA := preload("res://map_tile_data.gd")
 const CARD_HAND_UI_SCRIPT := preload("res://card_hand_ui.gd")
+const HEART_ICON := "♥"
+const SHIELD_ICON := "🛡"
 
 var requested_player_count := 1
 var bs: BattleState
@@ -55,6 +58,7 @@ var round_lbl: Label
 var phase_lbl: Label
 var active_player_lbl: Label
 var _turn_order_row: Control = null
+var _order_area: VBoxContainer = null
 var planning_hint_lbl: Label
 var prev_player_btn: Button
 var next_player_btn: Button
@@ -62,8 +66,11 @@ var next_round_btn: Button
 
 var board_3d: Board3D = null
 var _enemy_panels: Array = []
+var _enemy_title_lbls: Array = []
+var _enemy_type_lbls: Array = []
 var _enemy_hp_lbls: Array = []
 var _enemy_block_lbls: Array = []
+var _enemy_xp_lbls: Array = []
 var _enemy_status_lbls: Array = []
 var _enemy_behavior_lbls: Array = []
 var _enemy_deck_lbls: Array = []
@@ -80,6 +87,10 @@ var _screen_flash: ColorRect = null
 var _active_resolving_seat := -1
 var _active_resolving_card := -1
 var _card_hand_ui: Control = null
+var _bless_overlay: PanelContainer = null
+var _bless_overlay_title: Label = null
+var _active_bless_row_label: Label = null
+var _active_bless_panels: Array = []
 var _hand_ui_last_round := -1
 var _hand_ui_last_phase := -1
 var _hand_ui_last_seat := -1
@@ -169,6 +180,7 @@ func _build_ui() -> void:
 	_build_top_bar(root)
 	_build_main_row(root)
 	_build_card_hand_ui()
+	_build_bless_overlay()
 
 	_screen_flash = ColorRect.new()
 	_screen_flash.color = Color(0.75, 0.05, 0.05, 0.0)
@@ -220,21 +232,38 @@ func _build_top_bar(parent: Control) -> void:
 	middle.add_theme_constant_override("separation", 8)
 	top.add_child(middle)
 
-	var order_area := VBoxContainer.new()
-	order_area.add_theme_constant_override("separation", 2)
-	order_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	middle.add_child(order_area)
+	_order_area = VBoxContainer.new()
+	_order_area.add_theme_constant_override("separation", 4)
+	_order_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	middle.add_child(_order_area)
 
 	_turn_order_row = Control.new()
-	_turn_order_row.custom_minimum_size = Vector2(0, UITheme.font_size(38))
+	_turn_order_row.custom_minimum_size = Vector2(0, UITheme.font_size(64))
 	_turn_order_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_turn_order_row.visible = true
-	order_area.add_child(_turn_order_row)
+	_order_area.add_child(_turn_order_row)
+
+	var top_action_column := VBoxContainer.new()
+	top_action_column.add_theme_constant_override("separation", 6)
+	top_action_column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	middle.add_child(top_action_column)
+
+	next_round_btn = Button.new()
+	next_round_btn.text = "Next Round"
+	next_round_btn.custom_minimum_size = Vector2(120, 32)
+	next_round_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_style_btn(next_round_btn, Color(0.18, 0.38, 0.52))
+	next_round_btn.visible = false
+	next_round_btn.pressed.connect(_on_next_round_pressed)
+	top_action_column.add_child(next_round_btn)
+
+	_build_log(_order_area)
 
 	_build_enemy_panel(middle)
 
 	planning_hint_lbl = _lbl("Each player has their own hand, selected row, and Ready button.")
 	planning_hint_lbl.add_theme_color_override("font_color", Color(0.68, 0.70, 0.78))
+	planning_hint_lbl.visible = false
 	top.add_child(planning_hint_lbl)
 
 func _build_main_row(parent: Control) -> void:
@@ -243,7 +272,11 @@ func _build_main_row(parent: Control) -> void:
 	hbox.add_theme_constant_override("separation", 8)
 	parent.add_child(hbox)
 
-	_build_players_column(hbox)
+	var hidden_left_ui := Control.new()
+	hidden_left_ui.visible = false
+	hidden_left_ui.custom_minimum_size = Vector2.ZERO
+	hbox.add_child(hidden_left_ui)
+	_build_players_column(hidden_left_ui)
 	_build_board(hbox)
 
 func _build_card_hand_ui() -> void:
@@ -256,9 +289,10 @@ func _build_card_hand_ui() -> void:
 
 func _build_players_column(parent: Control) -> void:
 	var outer := PanelContainer.new()
-	outer.custom_minimum_size = Vector2(PLAYER_PANEL_WIDTH, 0)
+	outer.custom_minimum_size = Vector2.ZERO
 	outer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	outer.add_theme_stylebox_override("panel", _flat_style(Color(0.10, 0.10, 0.14), 6, 6))
+	outer.add_theme_stylebox_override("panel", _flat_style(Color(0, 0, 0, 0), 0, 0))
+	outer.visible = false
 	parent.add_child(outer)
 
 	var scroll := ScrollContainer.new()
@@ -268,31 +302,6 @@ func _build_players_column(parent: Control) -> void:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 6)
 	outer.add_child(column)
-
-	# ── Bless Market strip ──────────────────────────────────────────────────────
-	var market_panel := PanelContainer.new()
-	market_panel.add_theme_stylebox_override("panel", _flat_style(Color(0.12, 0.10, 0.18), 4, 4))
-	column.add_child(market_panel)
-
-	var market_vbox := VBoxContainer.new()
-	market_vbox.add_theme_constant_override("separation", 2)
-	market_panel.add_child(market_vbox)
-
-	var market_lbl := _lbl("Bless Market", true)
-	market_lbl.add_theme_color_override("font_color", Color(0.82, 0.72, 1.0))
-	market_vbox.add_child(market_lbl)
-
-	var market_row := HBoxContainer.new()
-	market_row.add_theme_constant_override("separation", 4)
-	market_vbox.add_child(market_row)
-
-	_bless_market_panels.clear()
-	for _mi in range(3):
-		var mp := _make_bless_card_panel()
-		mp.gui_input.connect(_on_bless_market_panel_input.bind(_mi))
-		market_row.add_child(mp)
-		_bless_market_panels.append(mp)
-	# ────────────────────────────────────────────────────────────────────────────
 
 	column.add_child(scroll)
 
@@ -321,11 +330,11 @@ func _build_players_column(parent: Control) -> void:
 		var name_lbl := _lbl("Player %d" % (seat_index + 1), true)
 		header.add_child(name_lbl)
 
-		var hp_lbl := _lbl("HP: 12/12")
+		var hp_lbl := _lbl("%s 12/12" % HEART_ICON)
 		hp_lbl.add_theme_color_override("font_color", Color(0.42, 0.92, 0.54))
 		header.add_child(hp_lbl)
 
-		var block_lbl := _lbl("Block: 0")
+		var block_lbl := _lbl("%s 0" % SHIELD_ICON)
 		block_lbl.add_theme_color_override("font_color", Color(0.52, 0.72, 0.98))
 		header.add_child(block_lbl)
 
@@ -407,24 +416,6 @@ func _build_players_column(parent: Control) -> void:
 		_rotate_btns.append(seat_rotate_btns)
 		_rotate_block_btns.append(seat_rotate_block_btns)
 
-		# ── Bless hand row (Cleric only) ─────────────────────────────────────────
-		var bless_row_lbl := _lbl("Bless:")
-		bless_row_lbl.add_theme_color_override("font_color", Color(0.82, 0.72, 1.0))
-		panel_vbox.add_child(bless_row_lbl)
-
-		var bless_row := HBoxContainer.new()
-		bless_row.add_theme_constant_override("separation", 4)
-		panel_vbox.add_child(bless_row)
-
-		var seat_bless_panels: Array = []
-		for _bi in range(3):
-			var bp := _make_bless_card_panel()
-			bp.gui_input.connect(_on_bless_hand_card_input.bind(seat_index, _bi))
-			bless_row.add_child(bp)
-			seat_bless_panels.append(bp)
-		_player_bless_panels.append(seat_bless_panels)
-		# ─────────────────────────────────────────────────────────────────────────
-
 		_player_cards.append({
 			"panel": panel,
 			"name_lbl": name_lbl,
@@ -438,6 +429,7 @@ func _build_players_column(parent: Control) -> void:
 			"prev_block": null,
 			"prev_status": null,
 			"meta_lbl": meta_lbl,
+			"stamina_holder": stamina_holder,
 			"stamina_lbl": stamina_lbl,
 			"stamina_tween": null,
 			"ready_btn": ready_btn,
@@ -447,11 +439,56 @@ func _build_players_column(parent: Control) -> void:
 			"hand_lbl": hand_lbl,
 			"hand_row": hand_row,
 			"hand_cards": hand_cards,
-			"bless_row_lbl": bless_row_lbl,
-			"bless_row": bless_row,
 		})
 
-	_build_log(column)
+func _build_bless_overlay() -> void:
+	_bless_overlay = PanelContainer.new()
+	_bless_overlay.anchor_left = 1.0
+	_bless_overlay.anchor_top = 1.0
+	_bless_overlay.anchor_right = 1.0
+	_bless_overlay.anchor_bottom = 1.0
+	_bless_overlay.offset_left = -560.0
+	_bless_overlay.offset_top = -308.0
+	_bless_overlay.offset_right = -24.0
+	_bless_overlay.offset_bottom = -24.0
+	_bless_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bless_overlay.custom_minimum_size = Vector2(536.0, 280.0)
+	_bless_overlay.add_theme_stylebox_override("panel", _flat_style(Color(0.05, 0.07, 0.11, 0.88), 18, 12))
+	add_child(_bless_overlay)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	_bless_overlay.add_child(vbox)
+
+	_bless_overlay_title = _lbl("Bless Market", true)
+	_bless_overlay_title.add_theme_color_override("font_color", Color(0.82, 0.72, 1.0))
+	vbox.add_child(_bless_overlay_title)
+
+	var market_row := HBoxContainer.new()
+	market_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(market_row)
+
+	_bless_market_panels.clear()
+	for _mi in range(3):
+		var mp := _make_bless_card_panel()
+		mp.gui_input.connect(_on_bless_market_panel_input.bind(_mi))
+		market_row.add_child(mp)
+		_bless_market_panels.append(mp)
+
+	_active_bless_row_label = _lbl("Your Blesses")
+	_active_bless_row_label.add_theme_color_override("font_color", Color(0.82, 0.72, 1.0))
+	vbox.add_child(_active_bless_row_label)
+
+	var bless_row := HBoxContainer.new()
+	bless_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(bless_row)
+
+	_active_bless_panels.clear()
+	for bless_slot in range(3):
+		var bp := _make_bless_card_panel()
+		bp.gui_input.connect(_on_active_bless_hand_card_input.bind(bless_slot))
+		bless_row.add_child(bp)
+		_active_bless_panels.append(bp)
 
 func _build_board(parent: Control) -> void:
 	var svc := SubViewportContainer.new()
@@ -479,7 +516,7 @@ func _build_board(parent: Control) -> void:
 func _build_enemy_panel(parent: Control) -> void:
 	var outer := PanelContainer.new()
 	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	outer.add_theme_stylebox_override("panel", _flat_style(Color(0.12, 0.08, 0.08), 6, 4))
+	outer.add_theme_stylebox_override("panel", _flat_style(Color(0.12, 0.08, 0.08), 10, 6))
 	parent.add_child(outer)
 
 	var hbox := HBoxContainer.new()
@@ -488,8 +525,11 @@ func _build_enemy_panel(parent: Control) -> void:
 	outer.add_child(hbox)
 
 	_enemy_panels.clear()
+	_enemy_title_lbls.clear()
+	_enemy_type_lbls.clear()
 	_enemy_hp_lbls.clear()
 	_enemy_block_lbls.clear()
+	_enemy_xp_lbls.clear()
 	_enemy_status_lbls.clear()
 	_enemy_behavior_lbls.clear()
 	_enemy_deck_lbls.clear()
@@ -503,29 +543,54 @@ func _build_enemy_panel(parent: Control) -> void:
 	for i in range(BattleState.MAX_ENEMIES):
 		var panel := PanelContainer.new()
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		panel.add_theme_stylebox_override("panel", _flat_style(ENEMY_PANEL_BASE_COLOR, 5, 4))
+		panel.custom_minimum_size = Vector2(0, UITheme.font_size(118))
+		panel.add_theme_stylebox_override("panel", _enemy_card_style(ENEMY_PANEL_BASE_COLOR))
 		panel.mouse_filter = Control.MOUSE_FILTER_STOP
 		panel.gui_input.connect(_on_enemy_panel_input.bind(i))
 		hbox.add_child(panel)
 		_enemy_panels.append(panel)
 
 		var panel_vbox := VBoxContainer.new()
-		panel_vbox.add_theme_constant_override("separation", 2)
+		panel_vbox.add_theme_constant_override("separation", 4)
 		panel.add_child(panel_vbox)
+
+		var header := HBoxContainer.new()
+		header.add_theme_constant_override("separation", 6)
+		panel_vbox.add_child(header)
 
 		var title_lbl := _lbl("Enemy %d" % (i + 1), true)
 		title_lbl.add_theme_font_size_override("font_size", UITheme.font_size(14))
-		panel_vbox.add_child(title_lbl)
-		var hp_lbl := _lbl("HP: 6/6")
+		header.add_child(title_lbl)
+		_enemy_title_lbls.append(title_lbl)
+
+		header.add_child(_expand_spacer())
+
+		var xp_lbl := _lbl("XP 1")
+		xp_lbl.add_theme_font_size_override("font_size", UITheme.font_size(12))
+		xp_lbl.add_theme_color_override("font_color", Color(0.90, 0.80, 0.45))
+		header.add_child(xp_lbl)
+		_enemy_xp_lbls.append(xp_lbl)
+
+		var type_lbl := _lbl("Nashrat")
+		type_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
+		type_lbl.add_theme_color_override("font_color", Color(0.92, 0.92, 0.98))
+		panel_vbox.add_child(type_lbl)
+		_enemy_type_lbls.append(type_lbl)
+
+		var stat_row := HBoxContainer.new()
+		stat_row.add_theme_constant_override("separation", 10)
+		panel_vbox.add_child(stat_row)
+
+		var hp_lbl := _lbl("%s 6/6" % HEART_ICON)
 		hp_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		hp_lbl.add_theme_color_override("font_color", ENEMY_HP_BASE_COLOR)
-		panel_vbox.add_child(hp_lbl)
+		stat_row.add_child(hp_lbl)
 		_enemy_hp_lbls.append(hp_lbl)
 
-		var block_lbl := _lbl("Block: 0")
+		var block_lbl := _lbl("%s 0" % SHIELD_ICON)
 		block_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		block_lbl.add_theme_color_override("font_color", Color(0.52, 0.72, 0.98))
-		panel_vbox.add_child(block_lbl)
+		stat_row.add_child(block_lbl)
 		_enemy_block_lbls.append(block_lbl)
 
 		var status_lbl := _lbl("")
@@ -534,7 +599,7 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel_vbox.add_child(status_lbl)
 		_enemy_status_lbls.append(status_lbl)
 
-		var behavior_lbl := _lbl("Intent: ?\n\n")
+		var behavior_lbl := _lbl("Behavior: ?")
 		behavior_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 		behavior_lbl.clip_text = false
 		behavior_lbl.custom_minimum_size = Vector2(0, 42)
@@ -555,7 +620,7 @@ func _build_enemy_panel(parent: Control) -> void:
 
 func _build_log(parent: Control) -> void:
 	_log_scroll = ScrollContainer.new()
-	_log_scroll.custom_minimum_size = Vector2(0, 80)
+	_log_scroll.custom_minimum_size = Vector2(0, 92)
 	_log_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_log_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	parent.add_child(_log_scroll)
@@ -566,20 +631,6 @@ func _build_log(parent: Control) -> void:
 	log_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
 	log_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_log_scroll.add_child(log_lbl)
-
-	var button_row := HBoxContainer.new()
-	button_row.add_theme_constant_override("separation", 8)
-	parent.add_child(button_row)
-	button_row.add_child(_expand_spacer())
-
-	next_round_btn = Button.new()
-	next_round_btn.text = "Next Round"
-	next_round_btn.custom_minimum_size = Vector2(120, 32)
-	next_round_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_style_btn(next_round_btn, Color(0.18, 0.38, 0.52))
-	next_round_btn.visible = false
-	next_round_btn.pressed.connect(_on_next_round_pressed)
-	button_row.add_child(next_round_btn)
 
 func _start_battle() -> void:
 	_level_up_queue.clear()
@@ -622,7 +673,7 @@ func _update_ui() -> void:
 	next_round_btn.disabled = online_enabled and not online_is_host
 	active_player_lbl.visible = multiplayer_ui
 	active_player_lbl.text = "Editing: %s" % _active_player().name
-	planning_hint_lbl.text = _planning_hint_text()
+	planning_hint_lbl.text = ""
 
 	for enemy_idx in range(_enemy_panels.size()):
 		if enemy_idx < bs.enemies.size():
@@ -631,8 +682,11 @@ func _update_ui() -> void:
 			var prev_enemy_block = _enemy_prev_block[enemy_idx]
 			var prev_enemy_status = _enemy_prev_status[enemy_idx]
 			_refresh_enemy_panel_visual(enemy_idx)
-			_enemy_hp_lbls[enemy_idx].text = "HP: %d/%d" % [enemy.hp, enemy.max_hp]
-			_enemy_block_lbls[enemy_idx].text = "%s  Block: %d" % [enemy.enemy_type, enemy.block]
+			_enemy_title_lbls[enemy_idx].text = "Enemy %d" % (enemy_idx + 1)
+			_enemy_type_lbls[enemy_idx].text = enemy.enemy_type
+			_enemy_hp_lbls[enemy_idx].text = "%s %d/%d" % [HEART_ICON, enemy.hp, enemy.max_hp]
+			_enemy_block_lbls[enemy_idx].text = "%s %d" % [SHIELD_ICON, enemy.block]
+			_enemy_xp_lbls[enemy_idx].text = "XP %s" % _format_enemy_xp(enemy.xp_reward)
 			_enemy_status_lbls[enemy_idx].text = enemy.status_text()
 			_enemy_prev_hp[enemy_idx] = enemy.hp
 			_enemy_prev_block[enemy_idx] = enemy.block
@@ -644,21 +698,24 @@ func _update_ui() -> void:
 			if prev_enemy_status != null and String(prev_enemy_status) != _enemy_status_lbls[enemy_idx].text:
 				_pulse_enemy_stat_label(enemy_idx, _enemy_status_lbls, _enemy_status_tweens, ENEMY_STATUS_BASE_COLOR, STATUS_PULSE_COLOR)
 			if enemy.revealed != null:
-				_enemy_behavior_lbls[enemy_idx].text = "Intent: %s\nInit %d\n%s" % [
+				_enemy_behavior_lbls[enemy_idx].text = "Behavior: %s\nInit %d\n%s" % [
 					enemy.revealed.behavior_name,
 					enemy.revealed.initiative,
 					enemy.revealed.effect_text,
 				]
 			else:
-				_enemy_behavior_lbls[enemy_idx].text = "Intent: ?\n\n"
-			_enemy_deck_lbls[enemy_idx].text = "Draw: %d  Discard: %d  XP:%d" % [enemy.draw.size(), enemy.discard.size(), enemy.xp_reward]
+				_enemy_behavior_lbls[enemy_idx].text = "Behavior: ?"
+			_enemy_deck_lbls[enemy_idx].text = ""
 		else:
-			_enemy_panels[enemy_idx].add_theme_stylebox_override("panel", _flat_style(Color(0.09, 0.07, 0.07), 5, 4))
+			_enemy_panels[enemy_idx].add_theme_stylebox_override("panel", _enemy_card_style(Color(0.09, 0.07, 0.07), Color(0.22, 0.14, 0.14, 0.70)))
 			_stop_enemy_panel_target_pulse(enemy_idx)
+			_enemy_title_lbls[enemy_idx].text = "Enemy %d" % (enemy_idx + 1)
+			_enemy_type_lbls[enemy_idx].text = ""
 			_enemy_hp_lbls[enemy_idx].text = "—"
 			_enemy_block_lbls[enemy_idx].text = "—"
+			_enemy_xp_lbls[enemy_idx].text = ""
 			_enemy_status_lbls[enemy_idx].text = ""
-			_enemy_behavior_lbls[enemy_idx].text = "\n\n"
+			_enemy_behavior_lbls[enemy_idx].text = ""
 			_enemy_deck_lbls[enemy_idx].text = ""
 			_enemy_prev_hp[enemy_idx] = null
 			_enemy_prev_block[enemy_idx] = null
@@ -676,8 +733,8 @@ func _update_ui() -> void:
 		var prev_block = ui["prev_block"]
 		var prev_status = ui["prev_status"]
 		ui["name_lbl"].text = "%s (%s)" % [player.name, player.hero_type]
-		ui["hp_lbl"].text = "HP: %d/%d" % [player.hp, player.max_hp]
-		ui["block_lbl"].text = "Block: %d" % player.block
+		ui["hp_lbl"].text = "%s %d/%d" % [HEART_ICON, player.hp, player.max_hp]
+		ui["block_lbl"].text = "%s %d" % [SHIELD_ICON, player.block]
 		ui["status_lbl"].text = player.status_text()
 		ui["prev_hp"] = player.hp
 		ui["prev_block"] = player.block
@@ -692,6 +749,8 @@ func _update_ui() -> void:
 		]
 		var eff_stam := player.effective_stamina()
 		ui["stamina_lbl"].text = "Stamina: %d/%d%s" % [eff_stam - player.selected_stamina(), eff_stam, " (+%d)" % player.stamina_bonus if player.stamina_bonus > 0 else ""]
+		(ui["stamina_holder"] as Control).visible = false
+		ui["stamina_lbl"].visible = false
 		if prev_hp != null and int(prev_hp) != player.hp:
 			_pulse_player_stat_label(ui, "hp_lbl", "hp_tween", HP_BASE_COLOR, HP_GAIN_COLOR if player.hp > int(prev_hp) else HP_LOSS_COLOR)
 		if prev_block != null and int(prev_block) != player.block:
@@ -727,6 +786,8 @@ func _update_ui() -> void:
 			and _pending_bless_seat < 0
 		)
 		_set_button_attention(ready_btn, should_highlight_ready, ready_color, Color(0.56, 1.0, 0.70))
+		if seat_index == bs.selected_planning_player_index and _card_hand_ui != null:
+			_card_hand_ui.set_ready_attention(should_highlight_ready)
 
 		var selected_cards: Array = ui["selected_cards"]
 		(ui["selected_lbl"] as Label).visible = false
@@ -756,6 +817,8 @@ func _update_ui() -> void:
 
 	_update_bless_ui()
 	_update_card_hand_ui()
+	if _card_hand_ui != null and (bs.current_phase != BattleState.Phase.SELECT or _active_player() == null):
+		_card_hand_ui.set_ready_attention(false)
 	_set_button_attention(
 		next_round_btn,
 		next_round_btn.visible and not next_round_btn.disabled,
@@ -772,30 +835,44 @@ func _update_ui() -> void:
 func _update_bless_ui() -> void:
 	var in_select := bs.current_phase == BattleState.Phase.SELECT
 	var choosing_bless := _pending_bless_seat >= 0
+	var display_player: PlayerState = null
+	if bs.current_phase == BattleState.Phase.SELECT:
+		display_player = _active_player()
+	elif _active_resolving_seat >= 0:
+		display_player = bs.get_player(_active_resolving_seat)
+	elif owned_seat_index < bs.players.size():
+		display_player = bs.get_player(owned_seat_index)
+	var display_label := "Your Blesses"
+	if display_player != null:
+		display_label = "%s Blesses" % display_player.name
+	if _bless_overlay_title != null:
+		_bless_overlay.visible = bs.players.size() > 0
+		_bless_overlay_title.text = "Bless Market"
+	if _active_bless_row_label != null:
+		_active_bless_row_label.text = display_label
 	# Market panels
 	for i in range(_bless_market_panels.size()):
 		var card: BlessCardData = bs.bless_market[i] as BlessCardData if i < bs.bless_market.size() else null
 		var choosable := choosing_bless and card != null
 		_refresh_bless_panel(_bless_market_panels[i] as PanelContainer, card, false, choosable)
 		(_bless_market_panels[i] as PanelContainer).mouse_filter = Control.MOUSE_FILTER_STOP if choosable else Control.MOUSE_FILTER_IGNORE
-	# Per-player bless hand panels
-	for seat_index in range(_player_bless_panels.size()):
-		if seat_index >= bs.players.size():
-			continue
-		var player := bs.get_player(seat_index)
-		if player == null:
-			continue
-		var is_cleric := player.hero_type == "Cleric"
-		var can_play := in_select and _player_is_editable(player) and not player.ready and not ui_locked
-		var ui: Dictionary = _player_cards[seat_index] as Dictionary
-		ui["bless_row_lbl"].visible = is_cleric
-		ui["bless_row"].visible = is_cleric
-		var seat_panels: Array = _player_bless_panels[seat_index] as Array
-		for bi in range(seat_panels.size()):
-			var bp := seat_panels[bi] as PanelContainer
-			var bc: BlessCardData = player.bless_cards[bi] as BlessCardData if bi < player.bless_cards.size() else null
-			_refresh_bless_panel(bp, bc, can_play and bc != null)
-			bp.mouse_filter = Control.MOUSE_FILTER_STOP if (can_play and bc != null) else Control.MOUSE_FILTER_IGNORE
+	for bless_slot in range(_active_bless_panels.size()):
+		var bp := _active_bless_panels[bless_slot] as PanelContainer
+		var bc: BlessCardData = null
+		var can_play := false
+		if display_player != null:
+			bc = display_player.bless_cards[bless_slot] as BlessCardData if bless_slot < display_player.bless_cards.size() else null
+			can_play = in_select and _player_is_editable(display_player) and not display_player.ready and not ui_locked
+		_refresh_bless_panel(bp, bc, can_play and bc != null)
+		bp.mouse_filter = Control.MOUSE_FILTER_STOP if (can_play and bc != null) else Control.MOUSE_FILTER_IGNORE
+
+func _on_active_bless_hand_card_input(event: InputEvent, bless_slot: int) -> void:
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	var player: PlayerState = _active_player()
+	if player == null:
+		return
+	_on_bless_hand_card_input(event, player.seat_index, bless_slot)
 
 func _update_board() -> void:
 	if board_3d == null:
@@ -1203,11 +1280,17 @@ func _update_card_hand_ui() -> void:
 	var active_selected_idx := -1
 	if bs.current_phase == BattleState.Phase.SELECT:
 		display_player = _active_player()
-		show_hand = display_player != null
+		show_hand = display_player != null and not display_player.ready
 		can_edit = display_player != null and _player_is_editable(display_player)
 	elif _active_resolving_seat >= 0:
 		display_player = bs.get_player(_active_resolving_seat)
 		active_selected_idx = _active_resolving_card
+	elif bs.selected_planning_player_index >= 0 and bs.selected_planning_player_index < bs.players.size():
+		display_player = bs.get_player(bs.selected_planning_player_index)
+	elif owned_seat_index >= 0 and owned_seat_index < bs.players.size():
+		display_player = bs.get_player(owned_seat_index)
+	elif not bs.players.is_empty():
+		display_player = bs.get_player(0)
 	var display_seat := display_player.seat_index if display_player != null else -1
 	var animate_deal := (
 		show_hand
@@ -2509,7 +2592,24 @@ func _refresh_enemy_panel_visual(enemy_idx: int) -> void:
 	else:
 		_stop_enemy_panel_target_pulse(enemy_idx)
 		panel.scale = Vector2.ONE
-	panel.add_theme_stylebox_override("panel", _flat_style(color, 5, 6))
+	panel.add_theme_stylebox_override("panel", _enemy_card_style(color))
+
+func _enemy_card_style(color: Color, border_color: Color = Color(0.42, 0.20, 0.18, 0.92)) -> StyleBoxFlat:
+	var style := _flat_style(color, 16, 10)
+	style.border_width_left = 2
+	style.border_width_right = 2
+	style.border_width_top = 2
+	style.border_width_bottom = 2
+	style.border_color = border_color
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.22)
+	style.shadow_size = 8
+	style.shadow_offset = Vector2(0, 2)
+	return style
+
+func _format_enemy_xp(xp: float) -> String:
+	if is_equal_approx(fmod(xp, 1.0), 0.0):
+		return str(int(round(xp)))
+	return str(xp)
 
 func _start_enemy_panel_target_pulse(enemy_idx: int) -> void:
 	if enemy_idx < 0 or enemy_idx >= _enemy_panels.size() or _enemy_panel_target_tweens.has(enemy_idx):
@@ -2593,7 +2693,7 @@ func _make_card_panel() -> PanelContainer:
 
 func _make_bless_card_panel() -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(CARD_PANEL_SIZE.x, 62)
+	panel.custom_minimum_size = BLESS_PANEL_SIZE
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var vbox := VBoxContainer.new()

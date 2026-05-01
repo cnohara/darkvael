@@ -8,6 +8,7 @@ const TILE_SIZE := 1.0
 const TILE_GAP  := 0.07
 const TILE_H    := 0.14
 const UNIT_H    := 0.82
+const UNIT_WORLD_OFFSET := Vector3(0.09, 0.0, 0.11)
 const ZOOM_MIN  := 2.6
 const ZOOM_DEFAULT := 6.0
 const ZOOM_MAX  := 14.0
@@ -42,6 +43,7 @@ var _enemy_colors := [
 var _targetable_enemy_indices: Array = []
 var _active_target_enemy_idx := -1
 var _enemy_target_tweens: Dictionary = {}
+var _highlighted_tiles: Array = []
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
@@ -55,6 +57,11 @@ func setup() -> void:
 	_build_units()
 	_build_camera()
 	update_board([], [], [], -1)
+
+func _process(_delta: float) -> void:
+	if _highlighted_tiles.is_empty():
+		return
+	_apply_highlight_visuals()
 
 func adjust_zoom(factor: float) -> void:
 	_cam.size = clampf(_cam.size / factor, ZOOM_MIN, ZOOM_MAX)
@@ -148,26 +155,24 @@ func set_enemy_label(enemy_idx: int, label_text: String) -> void:
 			lbl.text = label_text
 
 func update_board(player_positions: Array, enemy_positions: Array, highlighted: Array, active_player_idx: int = -1) -> void:
+	_highlighted_tiles = highlighted.duplicate()
+	_apply_highlight_visuals()
 	for y in range(5):
 		for x in range(5):
-			var mat: StandardMaterial3D = _tile_mats[y * 5 + x]
 			var gp := Vector2i(x, y)
-			if highlighted.has(gp):
-				mat.albedo_color = Color(0.08, 0.72, 0.48, 0.42)
-				mat.emission_enabled = true
-				mat.emission = Color(0.04, 0.38, 0.28)
-				mat.emission_energy_multiplier = 0.6
-			else:
-				mat.albedo_color = Color(0.20, 0.20, 0.28, 0.0)
-				mat.emission_enabled = false
-	_update_exit_tiles(highlighted)
+			if _highlighted_tiles.has(gp):
+				continue
+			var mat: StandardMaterial3D = _tile_mats[y * 5 + x]
+			mat.albedo_color = Color(0.20, 0.20, 0.28, 0.0)
+			mat.emission_enabled = false
+	_update_exit_tiles(_highlighted_tiles)
 	for i in range(_player_mis.size()):
 		var mi: MeshInstance3D = _player_mis[i]
 		var mat := mi.material_override as StandardMaterial3D
 		if i < player_positions.size() and player_positions[i] != Vector2i(-1, -1):
 			mi.visible = true
 			var pp: Vector2i = player_positions[i]
-			mi.position = _grid_to_world(pp, TILE_H + UNIT_H * 0.5)
+			mi.position = _unit_world_pos(pp, TILE_H + UNIT_H * 0.5)
 			if mat != null:
 				mat.emission_enabled = i == active_player_idx
 				mat.emission = Color(0.95, 0.90, 0.40)
@@ -180,7 +185,7 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 		if i < enemy_positions.size() and enemy_positions[i] != Vector2i(-1, -1):
 			enemy_mi.visible = true
 			var enemy_pos: Vector2i = enemy_positions[i]
-			enemy_mi.position = _grid_to_world(enemy_pos, TILE_H + UNIT_H * 0.5)
+			enemy_mi.position = _unit_world_pos(enemy_pos, TILE_H + UNIT_H * 0.5)
 			if mat != null:
 				mat.albedo_color = _enemy_colors[i]
 				mat.emission_enabled = false
@@ -195,6 +200,20 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 					mat.emission_energy_multiplier = 2.5
 		else:
 			enemy_mi.visible = false
+
+func _apply_highlight_visuals() -> void:
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * TAU * 0.30)
+	var alpha := lerpf(0.20, 0.52, pulse)
+	var emission_energy := lerpf(0.22, 0.82, pulse)
+	for y in range(5):
+		for x in range(5):
+			var mat: StandardMaterial3D = _tile_mats[y * 5 + x]
+			var gp := Vector2i(x, y)
+			if _highlighted_tiles.has(gp):
+				mat.albedo_color = Color(0.08, 0.72, 0.48, alpha)
+				mat.emission_enabled = true
+				mat.emission = Color(0.04, 0.38, 0.28)
+				mat.emission_energy_multiplier = emission_energy
 
 func flash_tile(pos: Vector2i, color: Color) -> void:
 	if _exit_mats.has(pos):
@@ -236,7 +255,7 @@ func animate_enemy_step(enemy_idx: int, target_grid: Vector2i) -> void:
 
 func _animate_step_mesh(mi: MeshInstance3D, target_grid: Vector2i) -> void:
 	var from := mi.position
-	var to   := _grid_to_world(target_grid, TILE_H + UNIT_H * 0.5)
+	var to   := _unit_world_pos(target_grid, TILE_H + UNIT_H * 0.5)
 	var hop  := 0.48
 
 	var step_fn := func(t: float) -> void:
@@ -459,13 +478,16 @@ func _add_exit_tile(gpos: Vector2i, world_pos: Vector3) -> void:
 	area.input_event.connect(_on_tile_event.bind(gpos))
 
 func _update_exit_tiles(highlighted: Array) -> void:
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * TAU * 0.30)
+	var alpha := lerpf(0.26, 0.66, pulse)
+	var emission_energy := lerpf(0.30, 1.02, pulse)
 	for gpos in _exit_mats.keys():
 		var mat: StandardMaterial3D = _exit_mats[gpos]
 		if highlighted.has(gpos):
-			mat.albedo_color = Color(0.04, 0.86, 0.56, 0.58)
+			mat.albedo_color = Color(0.04, 0.86, 0.56, alpha)
 			mat.emission_enabled = true
 			mat.emission = Color(0.04, 0.42, 0.28)
-			mat.emission_energy_multiplier = 0.8
+			mat.emission_energy_multiplier = emission_energy
 		else:
 			mat.albedo_color = Color(0.04, 0.70, 0.48, 0.0)
 			mat.emission_enabled = false
@@ -545,6 +567,8 @@ func _add_exit_dressing(cell: Vector2i, dir: String) -> void:
 	right.position = base + offsets[1]
 	_map_dressing_root.add_child(left)
 	_map_dressing_root.add_child(right)
+
+	_add_exit_arrow_dressing(cell, dir)
 
 func _add_obstacle_dressing(cell: Vector2i) -> void:
 	var base := MeshInstance3D.new()
@@ -779,6 +803,36 @@ func _start_torch_flicker(light: OmniLight3D, flame: Node3D, seed: int) -> void:
 	tween.parallel().tween_property(flame, "rotation_degrees", glow_rot, rng.randf_range(0.30, 0.50))
 	tween.tween_callback(_start_torch_flicker.bind(light, flame, seed))
 
+func _add_exit_arrow_dressing(cell: Vector2i, dir: String) -> void:
+	var root := Node3D.new()
+	root.name = "ExitArrow_%d_%d_%s" % [cell.x, cell.y, dir]
+	root.position = _exit_pad_world_position(cell, dir) + Vector3(0.0, 0.034, 0.0)
+	root.rotation_degrees.y = _exit_arrow_yaw_degrees(dir)
+	_map_dressing_root.add_child(root)
+
+	var arrow_mat := _exit_arrow_material()
+	_add_exit_chevron(root, arrow_mat, -0.07)
+	_add_exit_chevron(root, arrow_mat, 0.05)
+
+func _add_exit_chevron(root: Node3D, arrow_mat: StandardMaterial3D, z_offset: float) -> void:
+	var left_bar := MeshInstance3D.new()
+	var left_mesh := BoxMesh.new()
+	left_mesh.size = Vector3(0.05, 0.010, 0.16)
+	left_bar.mesh = left_mesh
+	left_bar.position = Vector3(-0.038, 0.0, z_offset)
+	left_bar.rotation_degrees.y = -42.0
+	left_bar.material_override = arrow_mat
+	root.add_child(left_bar)
+
+	var right_bar := MeshInstance3D.new()
+	var right_mesh := BoxMesh.new()
+	right_mesh.size = Vector3(0.05, 0.010, 0.16)
+	right_bar.mesh = right_mesh
+	right_bar.position = Vector3(0.038, 0.0, z_offset)
+	right_bar.rotation_degrees.y = 42.0
+	right_bar.material_override = arrow_mat
+	root.add_child(right_bar)
+
 func _edge_world_position(cell: Vector2i, dir: String, y: float) -> Vector3:
 	var center := _grid_to_world(cell, y)
 	match dir:
@@ -807,6 +861,9 @@ func _exit_pad_world_position(cell: Vector2i, dir: String) -> Vector3:
 
 func _grid_to_world(pos: Vector2i, y: float) -> Vector3:
 	return Vector3(float(pos.x) * TILE_SIZE, y, float(Pathfinder.BOARD_SIZE - 1 - pos.y) * TILE_SIZE)
+
+func _unit_world_pos(pos: Vector2i, y: float) -> Vector3:
+	return _grid_to_world(pos, y) + UNIT_WORLD_OFFSET
 
 func _world_to_grid(pos: Vector3) -> Vector2i:
 	return Vector2i(roundi(pos.x / TILE_SIZE), Pathfinder.BOARD_SIZE - 1 - roundi(pos.z / TILE_SIZE))
@@ -872,6 +929,18 @@ func _wall_yaw_degrees(dir: String) -> float:
 			return 90.0
 	return 0.0
 
+func _exit_arrow_yaw_degrees(dir: String) -> float:
+	match dir:
+		MAP_TILE_DATA.DIR_NORTH:
+			return 0.0
+		MAP_TILE_DATA.DIR_EAST:
+			return -90.0
+		MAP_TILE_DATA.DIR_SOUTH:
+			return 180.0
+		MAP_TILE_DATA.DIR_WEST:
+			return 90.0
+	return 0.0
+
 func _stone_wall_material(row: float = 0.0, col: float = 0.0, cell: Vector2i = Vector2i.ZERO) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	var shade := 0.28 + 0.035 * float((cell.x * 5 + cell.y * 7 + int(row) * 3 + int(col)) % 5)
@@ -893,6 +962,17 @@ func _exit_material() -> StandardMaterial3D:
 	mat.emission_energy_multiplier = 0.35
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.roughness = 0.8
+	return mat
+
+func _exit_arrow_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.98, 0.92, 0.72, 0.30)
+	mat.emission_enabled = true
+	mat.emission = Color(0.84, 0.70, 0.28)
+	mat.emission_energy_multiplier = 0.22
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.roughness = 0.36
+	mat.no_depth_test = false
 	return mat
 
 func _torch_bracket_material() -> StandardMaterial3D:
@@ -995,7 +1075,7 @@ func _enemy_grid_pos(enemy_idx: int) -> Vector2i:
 	if enemy_idx < 0 or enemy_idx >= _enemy_mis.size():
 		return Vector2i(-1, -1)
 	var enemy_mi: MeshInstance3D = _enemy_mis[enemy_idx] as MeshInstance3D
-	var pos: Vector3 = enemy_mi.position
+	var pos: Vector3 = enemy_mi.position - UNIT_WORLD_OFFSET
 	return _world_to_grid(pos)
 
 func _start_enemy_target_pulse(enemy_idx: int) -> void:
