@@ -30,6 +30,7 @@ const ENEMY_PANEL_BASE_COLOR := Color(0.18, 0.09, 0.09)
 const ENEMY_PANEL_TARGETABLE_COLOR := Color(0.40, 0.26, 0.08)
 const ENEMY_PANEL_ACTIVE_COLOR := Color(0.70, 0.56, 0.12)
 const MAP_TILE_DATA := preload("res://map_tile_data.gd")
+const CARD_HAND_UI_SCRIPT := preload("res://card_hand_ui.gd")
 
 var requested_player_count := 1
 var bs: BattleState
@@ -78,6 +79,10 @@ var _log_scroll: ScrollContainer = null
 var _screen_flash: ColorRect = null
 var _active_resolving_seat := -1
 var _active_resolving_card := -1
+var _card_hand_ui: Control = null
+var _hand_ui_last_round := -1
+var _hand_ui_last_phase := -1
+var _hand_ui_last_seat := -1
 
 var _player_cards: Array = []
 var _rotate_btns: Array = []  # Move rotation buttons: Array[Array[Button]] per seat per hand slot
@@ -135,11 +140,11 @@ func _input(event: InputEvent) -> void:
 		if ui_locked or bs.current_phase != BattleState.Phase.SELECT:
 			return
 		match event.keycode:
-			KEY_1: _try_select_hand(_active_player(), 0)
-			KEY_2: _try_select_hand(_active_player(), 1)
-			KEY_3: _try_select_hand(_active_player(), 2)
-			KEY_4: _try_select_hand(_active_player(), 3)
-			KEY_5: _try_select_hand(_active_player(), 4)
+			KEY_1: _preview_hand_card(0)
+			KEY_2: _preview_hand_card(1)
+			KEY_3: _preview_hand_card(2)
+			KEY_4: _preview_hand_card(3)
+			KEY_5: _preview_hand_card(4)
 			KEY_TAB:
 				_focus_unready_player(1)
 			KEY_ENTER, KEY_KP_ENTER:
@@ -163,6 +168,7 @@ func _build_ui() -> void:
 
 	_build_top_bar(root)
 	_build_main_row(root)
+	_build_card_hand_ui()
 
 	_screen_flash = ColorRect.new()
 	_screen_flash.color = Color(0.75, 0.05, 0.05, 0.0)
@@ -239,6 +245,14 @@ func _build_main_row(parent: Control) -> void:
 
 	_build_players_column(hbox)
 	_build_board(hbox)
+
+func _build_card_hand_ui() -> void:
+	_card_hand_ui = CARD_HAND_UI_SCRIPT.new()
+	_card_hand_ui.select_mode_requested.connect(_on_hand_ui_select_mode_requested)
+	_card_hand_ui.deselect_requested.connect(_on_hand_ui_deselect_requested)
+	_card_hand_ui.reorder_requested.connect(_on_hand_ui_reorder_requested)
+	_card_hand_ui.ready_requested.connect(_on_hand_ui_ready_requested)
+	add_child(_card_hand_ui)
 
 func _build_players_column(parent: Control) -> void:
 	var outer := PanelContainer.new()
@@ -340,7 +354,8 @@ func _build_players_column(parent: Control) -> void:
 		stamina_lbl.add_theme_color_override("font_color", STAMINA_BASE_COLOR)
 		stamina_holder.add_child(stamina_lbl)
 
-		panel_vbox.add_child(_lbl("Selected:"))
+		var selected_lbl := _lbl("Selected:")
+		panel_vbox.add_child(selected_lbl)
 		var selected_row := HBoxContainer.new()
 		selected_row.add_theme_constant_override("separation", 4)
 		panel_vbox.add_child(selected_row)
@@ -352,7 +367,8 @@ func _build_players_column(parent: Control) -> void:
 			selected_row.add_child(card_panel)
 			selected_cards.append(card_panel)
 
-		panel_vbox.add_child(_lbl("Hand:"))
+		var hand_lbl := _lbl("Hand:")
+		panel_vbox.add_child(hand_lbl)
 		var hand_row := HBoxContainer.new()
 		hand_row.add_theme_constant_override("separation", 4)
 		panel_vbox.add_child(hand_row)
@@ -425,7 +441,11 @@ func _build_players_column(parent: Control) -> void:
 			"stamina_lbl": stamina_lbl,
 			"stamina_tween": null,
 			"ready_btn": ready_btn,
+			"selected_lbl": selected_lbl,
+			"selected_row": selected_row,
 			"selected_cards": selected_cards,
+			"hand_lbl": hand_lbl,
+			"hand_row": hand_row,
 			"hand_cards": hand_cards,
 			"bless_row_lbl": bless_row_lbl,
 			"bless_row": bless_row,
@@ -690,6 +710,7 @@ func _update_ui() -> void:
 		panel.add_theme_stylebox_override("panel", _flat_style(panel_color, 6, 6))
 
 		var ready_btn: Button = ui["ready_btn"]
+		ready_btn.visible = false
 		ready_btn.disabled = (
 			ui_locked
 			or bs.current_phase != BattleState.Phase.SELECT
@@ -708,6 +729,8 @@ func _update_ui() -> void:
 		_set_button_attention(ready_btn, should_highlight_ready, ready_color, Color(0.56, 1.0, 0.70))
 
 		var selected_cards: Array = ui["selected_cards"]
+		(ui["selected_lbl"] as Label).visible = false
+		(ui["selected_row"] as HBoxContainer).visible = false
 		for card_idx in range(PLAYER_MAX_SELECTED):
 			var selected_card: CardData = player.selected[card_idx] if card_idx < player.selected.size() else null
 			var active_card := seat_index == _active_resolving_seat and card_idx == _active_resolving_card
@@ -715,6 +738,8 @@ func _update_ui() -> void:
 			selected_cards[card_idx].mouse_filter = Control.MOUSE_FILTER_STOP if can_edit else Control.MOUSE_FILTER_IGNORE
 
 		var hand_cards: Array = ui["hand_cards"]
+		(ui["hand_lbl"] as Label).visible = false
+		(ui["hand_row"] as HBoxContainer).visible = false
 		for hand_idx in range(PLAYER_HAND_SIZE):
 			var hand_card: CardData = player.hand[hand_idx] if hand_idx < player.hand.size() else null
 			_refresh_card_panel(hand_cards[hand_idx], hand_card, false)
@@ -730,6 +755,7 @@ func _update_ui() -> void:
 				block_btn.disabled = not can_edit or hand_card == null or not player.can_select(CardData.create_rotate_block_card(hand_card.card_name, hand_card.initiative))
 
 	_update_bless_ui()
+	_update_card_hand_ui()
 	_set_button_attention(
 		next_round_btn,
 		next_round_btn.visible and not next_round_btn.disabled,
@@ -799,7 +825,7 @@ func _planning_hint_text() -> String:
 		return "%s is ready. Focus another player or unready to edit." % player.name
 	if player.stun:
 		return "%s is stunned. Choose only 1 card, then press Ready." % player.name
-	return "%s is active. Click hand cards to select, or rotate any card for +1 Move / +1 Block." % player.name
+	return "%s is active. Click a hand card to preview it, then choose Use Ability, Move 1, or Block 1." % player.name
 
 func _on_board_view_gui_input(event: InputEvent) -> void:
 	if board_3d == null:
@@ -1119,6 +1145,9 @@ func _pulse_stunned_status(seat_index: int) -> void:
 func _on_selected_card_input(event: InputEvent, seat_index: int, selected_index: int) -> void:
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		return
+	_try_deselect_selected_card(seat_index, selected_index)
+
+func _try_deselect_selected_card(seat_index: int, selected_index: int) -> void:
 	var player = bs.get_player(seat_index)
 	if player == null or not _player_is_editable(player):
 		return
@@ -1132,6 +1161,67 @@ func _on_selected_card_input(event: InputEvent, seat_index: int, selected_index:
 	if bs.deselect_card(seat_index, selected_index):
 		_update_ui()
 		_pulse_stamina_label(seat_index, false)
+
+func _preview_hand_card(hand_index: int) -> void:
+	if _card_hand_ui == null:
+		return
+	_card_hand_ui.preview_hand_index(hand_index)
+
+func _on_hand_ui_select_mode_requested(hand_index: int, mode: String) -> void:
+	var player: PlayerState = _active_player()
+	if player == null:
+		return
+	match mode:
+		"normal":
+			_try_select_hand(player, hand_index)
+		"rotated_move":
+			_try_rotate_card(player.seat_index, hand_index, "move")
+		"rotated_block":
+			_try_rotate_card(player.seat_index, hand_index, "block")
+
+func _on_hand_ui_deselect_requested(selected_index: int) -> void:
+	var player: PlayerState = _active_player()
+	if player == null:
+		return
+	_try_deselect_selected_card(player.seat_index, selected_index)
+
+func _on_hand_ui_reorder_requested(selected_index: int, direction: int) -> void:
+	var player: PlayerState = _active_player()
+	if player == null:
+		return
+	_on_move_selected_pressed(player.seat_index, selected_index, direction)
+
+func _on_hand_ui_ready_requested() -> void:
+	_toggle_player_ready(_active_player())
+
+func _update_card_hand_ui() -> void:
+	if _card_hand_ui == null:
+		return
+	var display_player: PlayerState = null
+	var show_hand := false
+	var can_edit := false
+	var active_selected_idx := -1
+	if bs.current_phase == BattleState.Phase.SELECT:
+		display_player = _active_player()
+		show_hand = display_player != null
+		can_edit = display_player != null and _player_is_editable(display_player)
+	elif _active_resolving_seat >= 0:
+		display_player = bs.get_player(_active_resolving_seat)
+		active_selected_idx = _active_resolving_card
+	var display_seat := display_player.seat_index if display_player != null else -1
+	var animate_deal := (
+		show_hand
+		and display_player != null
+		and (
+			_hand_ui_last_phase != BattleState.Phase.SELECT
+			or _hand_ui_last_round != bs.round_number
+			or _hand_ui_last_seat != display_seat
+		)
+	)
+	_card_hand_ui.set_view(display_player, can_edit, show_hand, active_selected_idx, animate_deal)
+	_hand_ui_last_phase = bs.current_phase
+	_hand_ui_last_round = bs.round_number
+	_hand_ui_last_seat = display_seat
 
 func _pulse_stamina_label(seat_index: int, spent: bool) -> void:
 	if seat_index < 0 or seat_index >= _player_cards.size():

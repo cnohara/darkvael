@@ -11,6 +11,35 @@ var effect_text: String = ""
 var effects: Array = []
 var rotated_from_name: String = ""
 
+func selection_mode() -> String:
+	if CardData.is_rotate_card(self):
+		if card_name == "\u21bb +1 Move":
+			return "rotated_move"
+		if card_name == "\u21bb +1 Block":
+			return "rotated_block"
+	return "normal"
+
+func original_card_name() -> String:
+	return rotated_from_name if CardData.is_rotate_card(self) and rotated_from_name != "" else card_name
+
+func original_card_data() -> CardData:
+	if not CardData.is_rotate_card(self):
+		return self
+	return CardData.from_name(rotated_from_name)
+
+func original_card_id() -> String:
+	var original := original_card_data()
+	return original.id if original != null else id
+
+func effective_cost() -> int:
+	return cost
+
+func effective_initiative() -> int:
+	return initiative
+
+func effective_action_text() -> String:
+	return effect_text
+
 static func _slug(value: String) -> String:
 	var slug := value.to_lower()
 	for ch in [" ", "-", "+", ",", ".", ":", ";", "(", ")", "/", "'"]:
