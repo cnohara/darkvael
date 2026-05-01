@@ -301,6 +301,10 @@ func _stop_player_facing_tween(player_idx: int) -> void:
 
 func animate_player_step(player_idx: int, target_grid: Vector2i) -> void:
 	var mi: MeshInstance3D = _player_mis[player_idx]
+	var from_grid := _world_to_grid(mi.position - UNIT_WORLD_OFFSET)
+	if from_grid != target_grid:
+		var move_yaw: float = _grid_direction_yaw(from_grid, target_grid)
+		_set_player_facing(player_idx, move_yaw)
 	await _animate_step_mesh(mi, _player_world_pos(target_grid))
 
 func animate_enemy_step(enemy_idx: int, target_grid: Vector2i) -> void:
@@ -931,8 +935,12 @@ func _player_standee_yaw(player_pos: Vector2i, enemy_positions: Array) -> float:
 			best_enemy = enemy_pos
 	if best_enemy == Vector2i(-1, -1):
 		return PLAYER_STANDEE_YAW_OPTIONS[0]
-	var from_world := _grid_to_world(player_pos, 0.0)
-	var to_world := _grid_to_world(best_enemy, 0.0)
+	var yaw: float = _grid_direction_yaw(player_pos, best_enemy)
+	return yaw
+
+func _grid_direction_yaw(from_pos: Vector2i, to_pos: Vector2i) -> float:
+	var from_world := _grid_to_world(from_pos, 0.0)
+	var to_world := _grid_to_world(to_pos, 0.0)
 	var delta := to_world - from_world
 	var target_yaw := rad_to_deg(atan2(delta.x, delta.z))
 	var best_yaw := PLAYER_STANDEE_YAW_OPTIONS[0]
