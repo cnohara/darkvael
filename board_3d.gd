@@ -8,7 +8,10 @@ const TILE_SIZE := 1.0
 const TILE_GAP  := 0.07
 const TILE_H    := 0.14
 const UNIT_H    := 0.82
+const PLAYER_STANDEE_BASE_H := 0.08
 const UNIT_WORLD_OFFSET := Vector3(0.09, 0.0, 0.11)
+const PLAYER_STANDEE_YAW_OPTIONS := [0.0, 90.0, 180.0, -90.0]
+const PLAYER_STANDEE_START_YAW := 180.0
 const ZOOM_MIN  := 2.6
 const ZOOM_DEFAULT := 6.0
 const ZOOM_MAX  := 14.0
@@ -16,6 +19,7 @@ const CAMERA_ROTATE_SPEED := 0.008
 const CAMERA_PAN_SPEED := 1.0
 const WALL_H    := 0.72
 const MAP_TILE_DATA := preload("res://map_tile_data.gd")
+const CLERIC_STANDEE_TEXTURE_PATH := "res://assets/ui/cleric-standee.png"
 
 var _tile_mats: Array = []
 var _exit_mats: Dictionary = {}
@@ -43,6 +47,9 @@ var _enemy_colors := [
 var _targetable_enemy_indices: Array = []
 var _active_target_enemy_idx := -1
 var _enemy_target_tweens: Dictionary = {}
+var _player_facing_tweens: Dictionary = {}
+var _player_target_yaws: Array = []
+var _player_spawn_facing_initialized: Array = []
 var _highlighted_tiles: Array = []
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -170,14 +177,21 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 		var mi: MeshInstance3D = _player_mis[i]
 		var mat := mi.material_override as StandardMaterial3D
 		if i < player_positions.size() and player_positions[i] != Vector2i(-1, -1):
+			var was_visible := mi.visible
 			mi.visible = true
 			var pp: Vector2i = player_positions[i]
-			mi.position = _unit_world_pos(pp, TILE_H + UNIT_H * 0.5)
+			mi.position = _player_world_pos(pp)
+			if not bool(_player_spawn_facing_initialized[i]):
+				_set_player_facing(i, PLAYER_STANDEE_START_YAW, true)
+				_player_spawn_facing_initialized[i] = true
+			else:
+				_set_player_facing(i, _player_standee_yaw(pp, enemy_positions), not was_visible)
 			if mat != null:
 				mat.emission_enabled = i == active_player_idx
 				mat.emission = Color(0.95, 0.90, 0.40)
 				mat.emission_energy_multiplier = 1.4 if i == active_player_idx else 0.0
 		else:
+			_stop_player_facing_tween(i)
 			mi.visible = false
 	for i in range(_enemy_mis.size()):
 		var enemy_mi: MeshInstance3D = _enemy_mis[i]
@@ -244,18 +258,57 @@ func set_enemy_target_state(selectable_indices: Array, active_enemy_idx: int = -
 func clear_enemy_target_state() -> void:
 	set_enemy_target_state([], -1)
 
+func _set_player_facing(player_idx: int, target_yaw: float, immediate: bool = false) -> void:
+	if player_idx < 0 or player_idx >= _player_mis.size():
+		return
+	if player_idx >= _player_target_yaws.size():
+		while _player_target_yaws.size() <= player_idx:
+			_player_target_yaws.append(0.0)
+	var mi: MeshInstance3D = _player_mis[player_idx]
+	if mi == null:
+		return
+	var current_target := float(_player_target_yaws[player_idx])
+	if not immediate and is_equal_approx(current_target, target_yaw):
+		return
+	_player_target_yaws[player_idx] = target_yaw
+	_stop_player_facing_tween(player_idx)
+	if immediate:
+		mi.rotation_degrees.y = target_yaw
+		return
+	var current_yaw := mi.rotation_degrees.y
+	var delta := wrapf(target_yaw - current_yaw, -180.0, 180.0)
+	var tween_target := current_yaw + delta
+	var tw := create_tween()
+	_player_facing_tweens[player_idx] = tw
+	tw.set_ease(Tween.EASE_OUT)
+	tw.set_trans(Tween.TRANS_CUBIC)
+	tw.tween_property(mi, "rotation_degrees:y", tween_target, 0.20)
+	tw.finished.connect(func() -> void:
+		if _player_facing_tweens.get(player_idx) == tw:
+			_player_facing_tweens.erase(player_idx)
+			mi.rotation_degrees.y = target_yaw
+	)
+
+func _stop_player_facing_tween(player_idx: int) -> void:
+	if not _player_facing_tweens.has(player_idx):
+		return
+	var tw: Tween = _player_facing_tweens[player_idx] as Tween
+	if tw != null:
+		tw.kill()
+	_player_facing_tweens.erase(player_idx)
+
 # ── Animations ───────────────────────────────────────────────────────────────
 
 func animate_player_step(player_idx: int, target_grid: Vector2i) -> void:
 	var mi: MeshInstance3D = _player_mis[player_idx]
-	await _animate_step_mesh(mi, target_grid)
+	await _animate_step_mesh(mi, _player_world_pos(target_grid))
 
 func animate_enemy_step(enemy_idx: int, target_grid: Vector2i) -> void:
-	await _animate_step_mesh(_enemy_mis[enemy_idx], target_grid)
+	await _animate_step_mesh(_enemy_mis[enemy_idx], _unit_world_pos(target_grid, TILE_H + UNIT_H * 0.5))
 
-func _animate_step_mesh(mi: MeshInstance3D, target_grid: Vector2i) -> void:
+func _animate_step_mesh(mi: MeshInstance3D, target_pos: Vector3) -> void:
 	var from := mi.position
-	var to   := _unit_world_pos(target_grid, TILE_H + UNIT_H * 0.5)
+	var to   := target_pos
 	var hop  := 0.48
 
 	var step_fn := func(t: float) -> void:
@@ -862,6 +915,35 @@ func _exit_pad_world_position(cell: Vector2i, dir: String) -> Vector3:
 func _grid_to_world(pos: Vector2i, y: float) -> Vector3:
 	return Vector3(float(pos.x) * TILE_SIZE, y, float(Pathfinder.BOARD_SIZE - 1 - pos.y) * TILE_SIZE)
 
+func _player_world_pos(pos: Vector2i) -> Vector3:
+	return _grid_to_world(pos, TILE_H + PLAYER_STANDEE_BASE_H * 0.5) + UNIT_WORLD_OFFSET
+
+func _player_standee_yaw(player_pos: Vector2i, enemy_positions: Array) -> float:
+	var best_enemy: Vector2i = Vector2i(-1, -1)
+	var best_dist := INF
+	for enemy_pos_variant in enemy_positions:
+		var enemy_pos := enemy_pos_variant as Vector2i
+		if enemy_pos == null or enemy_pos == Vector2i(-1, -1):
+			continue
+		var dist := player_pos.distance_squared_to(enemy_pos)
+		if dist < best_dist:
+			best_dist = dist
+			best_enemy = enemy_pos
+	if best_enemy == Vector2i(-1, -1):
+		return PLAYER_STANDEE_YAW_OPTIONS[0]
+	var from_world := _grid_to_world(player_pos, 0.0)
+	var to_world := _grid_to_world(best_enemy, 0.0)
+	var delta := to_world - from_world
+	var target_yaw := rad_to_deg(atan2(delta.x, delta.z))
+	var best_yaw := PLAYER_STANDEE_YAW_OPTIONS[0]
+	var best_diff := 360.0
+	for yaw in PLAYER_STANDEE_YAW_OPTIONS:
+		var diff := absf(wrapf(target_yaw - float(yaw), -180.0, 180.0))
+		if diff < best_diff:
+			best_diff = diff
+			best_yaw = float(yaw)
+	return best_yaw
+
 func _unit_world_pos(pos: Vector2i, y: float) -> Vector3:
 	return _grid_to_world(pos, y) + UNIT_WORLD_OFFSET
 
@@ -994,11 +1076,16 @@ func _flame_material(albedo: Color, emission: Color, energy: float) -> StandardM
 
 func _build_units() -> void:
 	_player_mis.clear()
+	_player_target_yaws.clear()
+	_player_facing_tweens.clear()
+	_player_spawn_facing_initialized.clear()
 	for i in range(4):
-		var player_mi := _unit_mesh(_player_colors[i], "P%d" % (i + 1), Color(1.0, 1.0, 0.15))
+		var player_mi := _player_unit_mesh(_player_colors[i], "P%d" % (i + 1), Color(1.0, 1.0, 0.15))
 		player_mi.visible = false
 		add_child(player_mi)
 		_player_mis.append(player_mi)
+		_player_target_yaws.append(0.0)
+		_player_spawn_facing_initialized.append(false)
 	_enemy_mis.clear()
 	for i in range(3):
 		var enemy_mi := _unit_mesh(_enemy_colors[i], str(i + 1), Color(1.0, 0.88, 0.70))
@@ -1035,6 +1122,90 @@ func _unit_mesh(color: Color, label_text: String, label_color: Color) -> MeshIns
 	lbl.no_depth_test = true
 	mi.add_child(lbl)
 	return mi
+
+func _player_unit_mesh(color: Color, label_text: String, label_color: Color) -> MeshInstance3D:
+	var root := MeshInstance3D.new()
+	var base_mesh := BoxMesh.new()
+	base_mesh.size = Vector3(0.54, 0.08, 0.34)
+	root.mesh = base_mesh
+	root.material_override = _player_standee_base_material(color)
+	root.rotation_degrees.y = 0.0
+
+	var slot := MeshInstance3D.new()
+	var slot_mesh := BoxMesh.new()
+	slot_mesh.size = Vector3(0.30, 0.16, 0.14)
+	slot.mesh = slot_mesh
+	slot.position = Vector3(0.0, 0.10, 0.0)
+	slot.material_override = _player_standee_slot_material()
+	root.add_child(slot)
+
+	var support := MeshInstance3D.new()
+	var support_mesh := BoxMesh.new()
+	support_mesh.size = Vector3(0.03, 0.86, 0.08)
+	support.mesh = support_mesh
+	support.position = Vector3(0.0, 0.47, 0.0)
+	support.material_override = _player_standee_edge_material()
+	root.add_child(support)
+
+	var standee_root := Node3D.new()
+	standee_root.position = Vector3(0.0, 0.58, 0.0)
+	root.add_child(standee_root)
+
+	var art_material := _player_standee_art_material()
+	for z_dir in [-1.0, 1.0]:
+		var art := MeshInstance3D.new()
+		var art_mesh := QuadMesh.new()
+		art_mesh.size = Vector2(0.62, 1.10)
+		art.mesh = art_mesh
+		art.position = Vector3(0.0, 0.0, 0.011 * z_dir)
+		art.material_override = art_material
+		if z_dir < 0.0:
+			art.rotation_degrees.y = 180.0
+		standee_root.add_child(art)
+
+	var lbl := Label3D.new()
+	lbl.text = label_text
+	lbl.pixel_size = 0.010
+	lbl.font_size = 72
+	lbl.outline_size = 6
+	lbl.modulate = label_color
+	lbl.position = Vector3(0.0, 1.22, 0.0)
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.no_depth_test = true
+	root.add_child(lbl)
+	return root
+
+func _player_standee_base_material(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.82, 0.80, 0.76)
+	mat.roughness = 0.88
+	mat.metallic = 0.02
+	mat.emission_enabled = true
+	mat.emission = color.darkened(0.18)
+	mat.emission_energy_multiplier = 0.18
+	return mat
+
+func _player_standee_slot_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.92, 0.90, 0.86)
+	mat.roughness = 0.74
+	return mat
+
+func _player_standee_edge_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.18, 0.14, 0.12)
+	mat.roughness = 0.78
+	return mat
+
+func _player_standee_art_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load(CLERIC_STANDEE_TEXTURE_PATH) as Texture2D
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.roughness = 0.92
+	return mat
 
 func _build_camera() -> void:
 	_cam            = Camera3D.new()
