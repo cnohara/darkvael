@@ -13,6 +13,7 @@ const MAX_ENEMIES := 3
 const PASS_INITIATIVE := 99
 
 const ENEMY_TYPES := ["UndeadSoldier", "UndeadArcher", "BlackKnight", "Nashrat", "AshenSkeleton"]
+const NON_BOSS_ENEMY_TYPES := ["UndeadSoldier", "UndeadArcher", "Nashrat", "AshenSkeleton"]
 
 var player_count: int = 1
 var players: Array = []
@@ -54,14 +55,11 @@ func setup(p_player_count: int) -> void:
 	var occupied: Array = []
 	for player in players:
 		occupied.append(player.pos)
-	var black_knight_spawned := false
 	for i in range(enemy_count):
 		var enemy = EnemyState.new()
 		enemy.index = i
-		var available_types := ENEMY_TYPES.filter(func(t): return t != "BlackKnight" or not black_knight_spawned)
+		var available_types := _available_enemy_types_for_count(enemy_count)
 		var et: String = available_types[randi() % available_types.size()]
-		if et == "BlackKnight":
-			black_knight_spawned = true
 		enemy.enemy_type = et
 		var stats := enemy_base_stats(et)
 		enemy.max_hp = stats["max_hp"]
@@ -147,14 +145,11 @@ func setup_new_encounter() -> void:
 	for player in players:
 		if player.alive:
 			occupied.append(player.pos)
-	var black_knight_spawned_enc := false
 	for i in range(enemy_count):
 		var enemy = EnemyState.new()
 		enemy.index = i
-		var available_types := ENEMY_TYPES.filter(func(t): return t != "BlackKnight" or not black_knight_spawned_enc)
+		var available_types := _available_enemy_types_for_count(enemy_count)
 		var et: String = available_types[randi() % available_types.size()]
-		if et == "BlackKnight":
-			black_knight_spawned_enc = true
 		enemy.enemy_type = et
 		var stats := enemy_base_stats(et)
 		enemy.max_hp = stats["max_hp"]
@@ -172,6 +167,11 @@ func setup_new_encounter() -> void:
 		enemies.append(enemy)
 		occupied.append(enemy.pos)
 	log_msg("A new wave of %d enemies approaches!" % enemy_count)
+
+func _available_enemy_types_for_count(enemy_count: int) -> Array:
+	if enemy_count == 1:
+		return ENEMY_TYPES
+	return NON_BOSS_ENEMY_TYPES
 
 func _relocate_players_for_active_map() -> void:
 	var terrain_blocked := MAP_TILE_DATA.get_obstacles(active_map_tile_id)
