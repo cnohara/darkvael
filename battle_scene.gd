@@ -34,6 +34,7 @@ const MAP_TILE_DATA := preload("res://map_tile_data.gd")
 const CARD_HAND_UI_SCRIPT := preload("res://card_hand_ui.gd")
 const HEART_ICON := "♥"
 const SHIELD_ICON := "🛡"
+const TOP_BAR_STABLE_HEIGHT := 220
 
 var requested_player_count := 1
 var bs: BattleState
@@ -190,6 +191,8 @@ func _build_ui() -> void:
 
 func _build_top_bar(parent: Control) -> void:
 	var top := VBoxContainer.new()
+	top.custom_minimum_size = Vector2(0, TOP_BAR_STABLE_HEIGHT)
+	top.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	top.add_theme_constant_override("separation", 3)
 	parent.add_child(top)
 
@@ -882,10 +885,12 @@ func _update_board() -> void:
 	for player in bs.players:
 		player_positions.append(player.pos if player.alive else Vector2i(-1, -1))
 	var enemy_positions: Array = []
+	var enemy_types: Array = []
 	for enemy in bs.enemies:
 		enemy_positions.append(enemy.pos if enemy.alive else Vector2i(-1, -1))
+		enemy_types.append(enemy.enemy_type if enemy.alive else "")
 	var active_idx: int = bs.selected_planning_player_index if bs.current_phase == BattleState.Phase.SELECT else -1
-	board_3d.update_board(player_positions, enemy_positions, highlighted_tiles, active_idx)
+	board_3d.update_board(player_positions, enemy_positions, highlighted_tiles, active_idx, enemy_types)
 	board_3d.set_enemy_target_state(_targetable_enemy_indices, _active_target_enemy_idx)
 
 func _planning_hint_text() -> String:
