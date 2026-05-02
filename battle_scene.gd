@@ -602,11 +602,16 @@ func _build_enemy_panel(parent: Control) -> void:
 		panel_vbox.add_child(status_lbl)
 		_enemy_status_lbls.append(status_lbl)
 
+		var behavior_clip := Control.new()
+		behavior_clip.clip_contents = true
+		behavior_clip.custom_minimum_size = Vector2(0, UITheme.font_size(52))
+		behavior_clip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		panel_vbox.add_child(behavior_clip)
 		var behavior_lbl := _lbl("Behavior: ?")
 		behavior_lbl.add_theme_font_size_override("font_size", UITheme.font_size(13))
-		behavior_lbl.clip_text = false
-		behavior_lbl.custom_minimum_size = Vector2(0, 42)
-		panel_vbox.add_child(behavior_lbl)
+		behavior_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		behavior_lbl.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+		behavior_clip.add_child(behavior_lbl)
 		_enemy_behavior_lbls.append(behavior_lbl)
 
 		var deck_lbl := _lbl("Draw: 6  Discard: 0")
@@ -1634,6 +1639,7 @@ func _resolve_player_effect(player: PlayerState, fx: Dictionary, card: CardData)
 						bs.log_msg("  %s has all conditions removed." % heal_target.name)
 				var result_msg: String = heal_target.apply_heal(int(fx.get("value", 0)))
 				bs.log_msg("  %s heals %s: %s" % [player.name, heal_target.name, result_msg])
+				board_3d.animate_player_heal(heal_target.seat_index)
 				if bool(fx.get("also_bless", false)):
 					await _grant_bless(heal_target)
 				elif bool(fx.get("bless_if_no_conditions", false)):

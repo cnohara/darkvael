@@ -499,6 +499,66 @@ func animate_block(target_pos: Vector2i) -> void:
 	await tween.finished
 	shield.queue_free()
 
+func animate_player_heal(player_idx: int) -> void:
+	if player_idx < 0 or player_idx >= _player_mis.size():
+		return
+	var mi: MeshInstance3D = _player_mis[player_idx]
+	if mi == null or not mi.visible:
+		return
+	_animate_heal_at(mi.position + Vector3(0.0, 0.54, 0.0))
+
+func _animate_heal_at(world: Vector3) -> void:
+	var root := Node3D.new()
+	root.position = world
+	add_child(root)
+
+	var ring := MeshInstance3D.new()
+	var ring_mesh := CylinderMesh.new()
+	ring_mesh.top_radius = 0.34
+	ring_mesh.bottom_radius = 0.34
+	ring_mesh.height = 0.03
+	ring.mesh = ring_mesh
+	ring.position = Vector3(0.0, -0.42, 0.0)
+	ring.material_override = _heal_effect_material(Color(0.68, 1.0, 0.78, 0.42), Color(0.34, 1.0, 0.62), 1.8)
+	root.add_child(ring)
+
+	var glow := MeshInstance3D.new()
+	var glow_mesh := SphereMesh.new()
+	glow_mesh.radius = 0.18
+	glow_mesh.height = 0.36
+	glow.mesh = glow_mesh
+	glow.position = Vector3(0.0, 0.0, 0.0)
+	glow.material_override = _heal_effect_material(Color(0.86, 1.0, 0.92, 0.26), Color(0.62, 1.0, 0.82), 2.4)
+	root.add_child(glow)
+
+	var spark_nodes: Array = []
+	for i in range(8):
+		var spark := MeshInstance3D.new()
+		var spark_mesh := SphereMesh.new()
+		spark_mesh.radius = 0.05
+		spark_mesh.height = 0.10
+		spark.mesh = spark_mesh
+		spark.material_override = _heal_effect_material(Color(1.0, 0.98, 0.84, 0.85), Color(0.88, 1.0, 0.72), 3.0)
+		var angle := TAU * float(i) / 8.0
+		spark.position = Vector3(cos(angle) * 0.18, -0.08 + float(i % 2) * 0.10, sin(angle) * 0.18)
+		root.add_child(spark)
+		spark_nodes.append({"node": spark, "angle": angle})
+
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(ring, "scale", Vector3(1.65, 1.0, 1.65), 0.75)
+	tw.tween_property(glow, "scale", Vector3(1.8, 1.8, 1.8), 0.75)
+	tw.tween_property(root, "position:y", world.y + 0.22, 0.75)
+	for spark_data in spark_nodes:
+		var spark: MeshInstance3D = spark_data["node"] as MeshInstance3D
+		var angle: float = float(spark_data["angle"])
+		var spark_target := Vector3(cos(angle + 0.52) * 0.44, 0.30 + absf(sin(angle)) * 0.18, sin(angle + 0.52) * 0.44)
+		tw.tween_property(spark, "position", spark_target, 0.75)
+		tw.tween_property(spark, "scale", Vector3(0.10, 0.10, 0.10), 0.75)
+	await tw.finished
+	root.queue_free()
+
+
 # ── Scene Build ──────────────────────────────────────────────────────────────
 
 func _build_environment() -> void:
@@ -1160,6 +1220,16 @@ func _flame_material(albedo: Color, emission: Color, energy: float) -> StandardM
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return mat
 
+func _heal_effect_material(albedo: Color, emission: Color, energy: float) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = albedo
+	mat.emission_enabled = true
+	mat.emission = emission
+	mat.emission_energy_multiplier = energy
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
 func _build_units() -> void:
 	_player_mis.clear()
 	_player_target_yaws.clear()
@@ -1240,6 +1310,7 @@ func _player_unit_mesh(color: Color, label_text: String, label_color: Color) -> 
 	root.add_child(support)
 
 	var standee_root := Node3D.new()
+	standee_root.name = "StandeeRoot"
 	standee_root.position = Vector3(0.0, 0.58, 0.0)
 	root.add_child(standee_root)
 
