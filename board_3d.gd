@@ -209,7 +209,7 @@ func update_board(player_positions: Array, enemy_positions: Array, highlighted: 
 			var was_visible := enemy_mi.visible
 			enemy_mi.visible = true
 			var enemy_pos: Vector2i = enemy_positions[i]
-			enemy_mi.position = _unit_world_pos(enemy_pos, TILE_H + UNIT_H * 0.5)
+			enemy_mi.position = _unit_world_pos(enemy_pos, TILE_H + PLAYER_STANDEE_BASE_H * 0.5)
 			var enemy_type := String(enemy_types[i]) if i < enemy_types.size() else ""
 			_set_enemy_standee_type(i, enemy_type)
 			if not bool(_enemy_spawn_facing_initialized[i]):
@@ -370,7 +370,7 @@ func animate_enemy_step(enemy_idx: int, target_grid: Vector2i) -> void:
 	if from_grid != target_grid:
 		var move_yaw: float = _grid_direction_yaw(from_grid, target_grid)
 		_set_enemy_facing(enemy_idx, move_yaw)
-	await _animate_step_mesh(mi, _unit_world_pos(target_grid, TILE_H + UNIT_H * 0.5))
+	await _animate_step_mesh(mi, _unit_world_pos(target_grid, TILE_H + PLAYER_STANDEE_BASE_H * 0.5))
 
 func _animate_step_mesh(mi: MeshInstance3D, target_pos: Vector3) -> void:
 	var from := mi.position

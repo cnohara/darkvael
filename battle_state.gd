@@ -50,7 +50,7 @@ func setup(p_player_count: int) -> void:
 	var spawns := _player_spawn_positions(player_count)
 	for i in range(player_count):
 		var player = PlayerStateScript.new()
-		player.setup_for_battle(i, spawns[i])
+		player.setup_for_battle(i, spawns[i], player_count)
 		player.draw_to_hand()
 		players.append(player)
 

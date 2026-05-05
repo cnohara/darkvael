@@ -6,7 +6,7 @@ This is a Godot 4.6 GL Compatibility prototype for a tactical card battler. The 
 
 - Entry point: `main.gd` configures the window, installs the shared UI theme, creates a `SessionManager`, shows the title screen, and swaps between title, lobby, and battle scenes.
 - Modes: single player, local multiplayer for 2-4 players, and prototype online host/join for 2 players.
-- Board: a 5x5 tactical grid rendered by `Board3D` with 3D tiles, unit blocks, orthographic camera, mouse-wheel/pinch zoom, movement highlights, target highlights, and simple movement/attack/block/hit animations.
+- Board: a 5x5 tactical grid rendered by `Board3D` with 3D tiles, illustrated standee units, orthographic camera, mouse-wheel/pinch zoom, movement highlights, target highlights, and combat animations (movement, attack, hit, block, heal particles).
 - Battle loop: setup, planning/select, reveal, resolve, refresh, repeated encounters, defeat overlay.
 - Planning: each living player has a hand, selected-card row, Ready button, stamina budget, and independent active-planning focus.
 - Round resolution: enemies reveal intent, actors sort by ascending initiative, players win initiative ties over enemies, then lower player/enemy index wins.
@@ -21,11 +21,11 @@ This is a Godot 4.6 GL Compatibility prototype for a tactical card battler. The 
 - `TitleScreen.tscn` / `title_screen.gd`: single-player, local multiplayer, online host/join, and quit UI.
 - `LobbyScene.tscn` / `lobby_scene.gd`: room-code lobby for online games.
 - `BattleScene.tscn` / `battle_scene.gd`: main combat UI, round flow, card/effect resolution, targeting, XP/level-up flow, online command handling.
-- `board_3d.gd` (`Board3D`): 5x5 3D board, tile and enemy clicks, unit meshes, zoom, highlights, and combat animations.
+- `board_3d.gd` (`Board3D`): 5x5 3D board, tile and enemy clicks, illustrated standee meshes, zoom, highlights, and combat animations.
 - `battle_state.gd` (`BattleState`): serializable battle model, setup, encounters, actor ordering, phase tracking, damage entry points, and queries.
-- `player_state.gd` (`PlayerState`): player resources, hand/selected/discard logic, conditions, damage/healing, XP/leveling, serialization.
+- `player_state.gd` (`PlayerState`): player resources, hand/selected/discard logic, conditions, damage/healing, XP/leveling, serialization. Holds `HERO_STATS` table for per-class HP/stamina scaling.
 - `enemy_state.gd` (`EnemyState`): enemy HP, block, conditions, behavior deck state, damage, serialization.
-- `card_data.gd` (`CardData`): base cards, Cleric class cards for levels 1-5, rotated card helpers, card lookup/encoding.
+- `card_data.gd` (`CardData`): base cards, class cards for levels 1-5 keyed by hero type, rotated card helpers, card lookup/encoding.
 - `behavior_data.gd` (`BehaviorData`): enemy-specific behavior decks and behavior lookup.
 - `pathfinder.gd` (`Pathfinder`): 5x5 grid reachability, pathfinding, neighbors, Manhattan distance.
 - `LevelUpOverlay.tscn` / `level_up_overlay.gd`: modal two-step level-up chooser.
@@ -50,9 +50,23 @@ This is a Godot 4.6 GL Compatibility prototype for a tactical card battler. The 
 
 The code currently has one implemented hero type: `Cleric`. All player seats use the same starting deck.
 
-| Character | Count | HP | Stamina | Hand | Selected Cards | Level | Status |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Cleric | 1-4 local seats, 2 online seats | 12 base | 3 base | Draw to 5 | Up to 3, or 1 while stunned | Starts at 1, max data through 5 | Bless plus poison/stun/entangle/hidden/confused/burn/immune |
+Hero stats scale with player count. Stats are defined in `PlayerState.HERO_STATS` (see **Adding A New Hero Class** below).
+
+### Cleric Stats By Player Count
+
+| Stat | 1P | 2P | 3P | 4P |
+| --- | ---: | ---: | ---: | ---: |
+| Max HP | 7 | 7 | 6 | 5 |
+| Max Stamina | 5 | 4 | 4 | 4 |
+
+Other character rules:
+
+| Property | Value |
+| --- | --- |
+| Hand size | Draw to 5 |
+| Selected cards | Up to 3, or 1 while stunned |
+| Starting level | 1 (max data through 5) |
+| Conditions | Bless, poison, stun, entangle, hidden, confused, burn, damage immunity |
 
 Player spawn positions:
 
@@ -82,6 +96,35 @@ Player resource and deck rules:
 - Healing is capped at max HP.
 - Player damage is reduced by block only for physical attacks; magic attacks ignore block.
 - Damage immunity makes player damage resolve to 0.
+
+## Adding A New Hero Class
+
+To add a new hero class, touch these four locations in order:
+
+**1. `player_state.gd` — add stat scaling**
+
+Add an entry to `HERO_STATS`. The arrays are indexed `[1P, 2P, 3P, 4P]`:
+
+```gdscript
+const HERO_STATS := {
+    "Cleric":  {"max_hp": [7, 7, 6, 5], "max_stamina": [5, 4, 4, 4]},
+    "Warrior": {"max_hp": [9, 8, 7, 6], "max_stamina": [4, 4, 3, 3]},  # example
+}
+```
+
+`setup_for_battle(seat, spawn, player_count, hero_type)` already looks up stats by `hero_type` and falls back to `"Cleric"` for unknown types.
+
+**2. `card_data.gd` — add class cards**
+
+`get_class_cards_for_level(hero_type, level)` and `create_starting_deck(hero_type)` already key off `hero_type`. Add the new class's level 1–5 cards following the existing Cleric block.
+
+**3. `board_3d.gd` — add standee art**
+
+Add a texture path for the class to `CLERIC_STANDEE_TEXTURE_PATH` (or create a parallel constant), and wire it up in `_player_standee_art_material()` based on the hero type being rendered. Currently all player seats share the Cleric texture.
+
+**4. `battle_state.gd` — pass the chosen hero type**
+
+`setup()` calls `player.setup_for_battle(i, spawns[i], player_count)`. When class selection is added to the lobby or title screen, pass the chosen `hero_type` as the fourth argument here.
 
 ## XP And Leveling
 
@@ -186,7 +229,7 @@ Player resource and deck rules:
 - Ranged player attacks exclude adjacent enemies (`dist <= 1`).
 - Multi-target player attacks use click/tap targeting when more than one target is valid.
 - Targeting requires two taps/clicks: first marks the active target, second confirms.
-- `heal`: supports self, auto-selected self-or-ally, adjacent allies, self plus adjacent allies, allies in range, optional cleanse-all, optional Bless, and Bless-if-no-conditions.
+- `heal`: supports self, auto-selected self-or-ally, adjacent allies, self plus adjacent allies, allies in range, optional cleanse-all, optional Bless, and Bless-if-no-conditions. Triggers a green particle burst animation on the healed standee.
 - Auto-targeted self-or-ally effects pick the lowest-HP living ally in range, or self if none are found.
 - `block`: supports self, self plus adjacent allies, all allies in range with Bless bonus, and auto-selected self-or-ally.
 - `move` and `jump`: both use normal pathfinding movement.
@@ -319,13 +362,21 @@ Player and enemy state supports:
 - `Slow`: enemy-only movement reduction by 1 for `move_toward` and `move_away`.
 - `damage_immune`: player-only status from Sanctuary-style effects; damage resolves to 0 until cleanup.
 
+## Board 3D And Standees
+
+- Player standees are illustrated card-style pieces built from a base plate, support rod, and two-sided QuadMesh art panel. All four player seats currently use the Cleric texture (`assets/ui/cleric-standee.png`).
+- Enemy standees share the same structure. The texture is swapped per enemy type via `_set_enemy_standee_type()`, which looks up `ENEMY_STANDEE_TEXTURE_PATHS` in `board_3d.gd`.
+- Standees face toward the nearest visible opposing unit and smoothly rotate when their target changes.
+- The active planning player's standee base emits a yellow glow.
+- Combat animations: `animate_player_step` / `animate_enemy_step` (hop arc), `animate_melee_attack` / `animate_ranged_attack` (lunge/projectile), `animate_player_hit` / `animate_enemy_hit` (red flash + knockback), `animate_block` (shield flash), `animate_player_heal` (green particle burst).
+
 ## UI And Controls
 
 - Title screen supports single player, local multiplayer, host online, join online, and quit.
 - Local multiplayer expands to 2, 3, or 4 player buttons.
 - Host/join panels accept a server URL; join also accepts a room code.
 - Battle top bar shows round, phase, active player, actor order preview, and enemy panels.
-- Enemy panels show HP, block, status, revealed intent, draw/discard counts, and XP reward.
+- Enemy panels show HP, block, status, revealed intent (clipped to a fixed height so the layout never shifts), draw/discard counts, and XP reward.
 - Player panels show name/class, HP, block, status, level, XP, deck counts, initiative, stamina, selected cards, hand cards, and Ready button.
 - Hand cards can be clicked to select.
 - Selected cards can be clicked to deselect.
@@ -340,7 +391,7 @@ Player and enemy state supports:
 - Board zoom supports mouse wheel and magnify gestures.
 - Board tiles are clickable during movement prompts.
 - Enemy units and enemy panels are clickable during attack targeting.
-- The combat log shows the latest 8 messages and auto-scrolls.
+- The combat log shows the latest 4 messages and auto-scrolls.
 - HP, block, status, and stamina labels pulse when their values change.
 - Targetable enemies are highlighted on both board and panel; the active target pulses.
 
@@ -382,11 +433,11 @@ Online battle sync details:
 - `jump` currently uses normal movement and does not ignore pathing.
 - Forced movement effects (`push`, `push_target`) are not implemented.
 - Wall-collision stun for forced movement is not implemented.
-
 - `Confused` is tracked and displayed but has no behavior yet.
 - Enemy-side cleansing does not exist.
 - There is no victory overlay for clearing an encounter; victory immediately transitions toward a new wave.
 - Online level-up is risky for guests because the host-owned battle resolves and displays level-up overlays on the host side.
+- All four player seats use the Cleric standee texture; per-seat texture selection is not yet wired to hero type.
 
 ## Development Notes
 
@@ -395,7 +446,7 @@ Online battle sync details:
 - When adding online-visible battle data, update all `to_dict()` / `load_from_dict()` paths and host snapshot fields if needed.
 - When adding new card effect types, update `CardData`, `_resolve_player_effect()`, and the known gaps section above.
 - When adding new enemy behavior effect types, update `BehaviorData`, `_resolve_enemy_effect()`, and any movement/targeting helpers.
-- If adding new characters, `PlayerState.setup_for_battle()` currently hardcodes `hero_type = "Cleric"`.
+- When adding a new hero class, follow the **Adding A New Hero Class** section above.
 - If adding new enemy types, update `BattleState.ENEMY_TYPES`, `BattleState.enemy_base_stats()`, `BehaviorData.create_deck_for_type()`, `BehaviorData.from_name()`, and any undead/type-specific logic.
 - If changing online commands, update both guest send paths and host `_on_online_command_received()`.
 - If changing player movement blocking rules, update both `Pathfinder` comments and `BattleState.occupied_positions_for_player()`.

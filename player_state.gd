@@ -1,8 +1,9 @@
 class_name PlayerState
 extends RefCounted
 
-const BASE_MAX_HP := 12
-const BASE_MAX_STAMINA := 3
+const HERO_STATS := {
+	"Cleric": {"max_hp": [7, 7, 6, 5], "max_stamina": [5, 4, 4, 4]},
+}
 const MAX_SELECTED := 3
 const STUNNED_MAX_SELECTED := 1
 const HAND_SIZE := 5
@@ -14,9 +15,9 @@ var name: String = ""
 var hero_type: String = "Cleric"
 var level: int = 1
 var xp: float = 0.0
-var hp: int = BASE_MAX_HP
-var max_hp: int = BASE_MAX_HP
-var max_stamina: int = BASE_MAX_STAMINA
+var hp: int = HERO_STATS["Cleric"]["max_hp"][0]
+var max_hp: int = HERO_STATS["Cleric"]["max_hp"][0]
+var max_stamina: int = HERO_STATS["Cleric"]["max_stamina"][0]
 var block: int = 0
 var pos: Vector2i = Vector2i.ZERO
 var draw_pile: Array = []
@@ -42,14 +43,16 @@ var confused: bool = false
 var burn: int = 0
 var damage_immune: bool = false
 
-func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i) -> void:
+func setup_for_battle(p_seat_index: int, spawn_pos: Vector2i, player_count: int = 1, p_hero_type: String = "Cleric") -> void:
 	seat_index = p_seat_index
 	name = "Player %d" % (seat_index + 1)
-	hero_type = "Cleric"
+	hero_type = p_hero_type
 	level = 1
 	xp = 0
-	max_hp = BASE_MAX_HP
-	max_stamina = BASE_MAX_STAMINA
+	var stats: Dictionary = HERO_STATS.get(hero_type, HERO_STATS["Cleric"])
+	var idx := clampi(player_count - 1, 0, 3)
+	max_hp = (stats["max_hp"] as Array)[idx]
+	max_stamina = (stats["max_stamina"] as Array)[idx]
 	hp = max_hp
 	block = 0
 	_clear_conditions()
